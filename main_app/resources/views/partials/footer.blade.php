@@ -22,7 +22,7 @@
                 <ul class="footer-links" style="margin-bottom: 1.5rem;">
                     <li><a href="https://maps.app.goo.gl/iMBVRtmfdW1nLEzS8" target="_blank"><i class="fa-solid fa-location-dot text-gold"></i> Jl. Dr. Sutomo, Tanjungpinang, Kepulauan Riau, 29100</a></li>
                     <li><a href="tel:+6277121616"><i class="fa-solid fa-phone text-gold"></i> +62-0771-21216</a></li>
-                    <li><a href="mailto:info@sman1-tpi.sch.id"><i class="fa-solid fa-envelope text-gold"></i> info@sman1-tpi.sch.id</a></li>
+                    <li><a href="mailto:info@smansa-tpi.sch.id"><i class="fa-solid fa-envelope text-gold"></i> info@smansa-tpi.sch.id</a></li>
                 </ul>
                 <h3>Tautan Cepat</h3>
                 <ul class="footer-links">

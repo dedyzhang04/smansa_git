@@ -266,7 +266,7 @@
         @php
             $kopHeader1 = \App\Models\Setting::get('kop_header_1', 'PEMERINTAH PROVINSI KEPULAUAN RIAU');
             $kopHeader2 = \App\Models\Setting::get('kop_header_2', 'SMA NEGERI 1 TANJUNGPINANG');
-            $kopAddress = \App\Models\Setting::get('kop_address', 'Jalan K.H. Agus Salim No. 1, Tanjungpinang | Telp: (0771) 21112 | Email: info@sman1-tpi.sch.id');
+            $kopAddress = \App\Models\Setting::get('kop_address', 'Jalan K.H. Agus Salim No. 1, Tanjungpinang | Telp: (0771) 21112 | Email: info@smansa-tpi.sch.id');
             $kopWebsite = \App\Models\Setting::get('kop_website', 'Website: smansa-tpi.sch.id | Akreditasi A');
             $kopLogoLeft = \App\Models\Setting::get('kop_logo_left', \App\Models\Setting::get('kop_logo', '/images/logo.png'));
             $kopLogoRight = \App\Models\Setting::get('kop_logo_right', \App\Models\Setting::get('kop_logo', '/images/logo.png'));

@@ -2,16 +2,16 @@
 <div class="top-bar">
     <div class="container">
         <div class="top-bar-info">
-            <a href="mailto:info@sman1-tpi.sch.id"><i class="fa-solid fa-envelope text-gold"></i> info@sman1-tpi.sch.id</a>
+            <a href="mailto:info@smansa-tpi.sch.id"><i class="fa-solid fa-envelope text-gold"></i> info@smansa-tpi.sch.id</a>
             <a href="tel:+6277121616"><i class="fa-solid fa-phone text-gold"></i> +62-0771-21216</a>
         </div>
         
         <div class="top-bar-portal">
-            <a href="https://osis.sman1-tpi.sch.id" target="_blank" class="portal-link">OSIS</a>
+            <a href="https://osis.smansa-tpi.sch.id" target="_blank" class="portal-link">OSIS</a>
             <a href="#" class="portal-link">Forums</a>
-            <a href="https://pustaka.sman1-tpi.sch.id" target="_blank" class="portal-link">e-Library</a>
-            <a href="http://rapor.sman1-tpi.sch.id" target="_blank" class="portal-link">e-Rapor</a>
-            <a href="http://lms.sman1-tpi.sch.id" target="_blank" class="portal-link">e-Learning</a>
+            <a href="https://pustaka.smansa-tpi.sch.id" target="_blank" class="portal-link">e-Library</a>
+            <a href="http://rapor.smansa-tpi.sch.id" target="_blank" class="portal-link">e-Rapor</a>
+            <a href="http://lms.smansa-tpi.sch.id" target="_blank" class="portal-link">e-Learning</a>
         </div>
 
         <div class="top-bar-socials">

@@ -91,7 +91,7 @@
                     </div>
                     <div style="text-align: left;">
                         <h4 style="font-size: 0.9rem; color: var(--primary-dark); font-weight: 700;">{{ Session::get('admin_name', 'Humas Admin') }}</h4>
-                        <p style="font-size: 0.75rem; color: var(--text-muted);">{{ Session::get('admin_email', 'admin@sman1-tpi.sch.id') }}</p>
+                        <p style="font-size: 0.75rem; color: var(--text-muted);">{{ Session::get('admin_email', 'admin@smansa-tpi.sch.id') }}</p>
                     </div>
                 </div>
             </div>

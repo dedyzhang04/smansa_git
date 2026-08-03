@@ -64,7 +64,7 @@
             </a>
 
             <!-- e-Library -->
-            <a href="https://pustaka.sman1-tpi.sch.id" target="_blank" class="portal-card">
+            <a href="https://pustaka.smansa-tpi.sch.id" target="_blank" class="portal-card">
                 <div class="icon-box">
                     <i class="fa-solid fa-book-open"></i>
                 </div>
@@ -73,7 +73,7 @@
             </a>
 
             <!-- e-Rapor -->
-            <a href="http://rapor.sman1-tpi.sch.id" target="_blank" class="portal-card">
+            <a href="http://rapor.smansa-tpi.sch.id" target="_blank" class="portal-card">
                 <div class="icon-box">
                     <i class="fa-solid fa-file-invoice"></i>
                 </div>
@@ -82,7 +82,7 @@
             </a>
 
             <!-- e-Learning -->
-            <a href="http://lms.sman1-tpi.sch.id" target="_blank" class="portal-card">
+            <a href="http://lms.smansa-tpi.sch.id" target="_blank" class="portal-card">
                 <div class="icon-box">
                     <i class="fa-solid fa-laptop-code"></i>
                 </div>
@@ -290,7 +290,7 @@
                             </div>
                             <div class="contact-details">
                                 <h4>Alamat Surel</h4>
-                                <p>info@sman1-tpi.sch.id</p>
+                                <p>info@smansa-tpi.sch.id</p>
                             </div>
                         </div>
                     </div>

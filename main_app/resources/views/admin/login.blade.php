@@ -35,7 +35,7 @@
             @csrf
             <div class="form-group">
                 <label for="email">Alamat Email *</label>
-                <input type="email" id="email" name="email" class="form-control" placeholder="admin@sman1-tpi.sch.id" value="{{ old('email') }}" required>
+                <input type="email" id="email" name="email" class="form-control" placeholder="admin@smansa-tpi.sch.id" value="{{ old('email') }}" required>
             </div>
 
             <div class="form-group" style="margin-bottom: 2.5rem;">

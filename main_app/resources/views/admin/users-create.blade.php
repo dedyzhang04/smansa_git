@@ -104,7 +104,7 @@
 
                         <div class="form-group">
                             <label for="email">Alamat Surel (Email) *</label>
-                            <input type="email" id="email" name="email" class="form-control" placeholder="staff@sman1-tpi.sch.id" value="{{ old('email') }}" required>
+                            <input type="email" id="email" name="email" class="form-control" placeholder="staff@smansa-tpi.sch.id" value="{{ old('email') }}" required>
                             @error('email')
                                 <span style="font-size: 0.8rem; color: #ef4444; font-weight: 500;">{{ $message }}</span>
                             @enderror
