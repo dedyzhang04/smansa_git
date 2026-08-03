@@ -2162,6 +2162,10 @@ textarea.form-control {
         text-align: center !important;
     }
 
+    .top-bar {
+        display: none;
+    }
+
     .top-bar .container {
         flex-direction: column;
         gap: 0.75rem;
