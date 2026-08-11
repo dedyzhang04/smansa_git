@@ -74,6 +74,14 @@
                     <a href="{{ route('home') }}#kontak" class="nav-link">Kontak</a>
                 </li>
 
+                <li class="nav-item">
+                    <a href="#" class="nav-link">Pengaduan <i class="fa-solid fa-chevron-down" style="font-size: 0.7rem;"></i></a>
+                    <ul class="dropdown-menu">
+                        <li><a href="https://forms.gle/VfTPQeF9UL3gheCK7" class="dropdown-link">Pengaduan Sekolah</a></li>
+                        <li><a href="https://wwww.lapor.go.id" class="dropdown-link">SP4N LAPOR</a></li>
+                    </ul>
+                </li>
+
                 <li class="nav-item" style="margin-left: 1rem;">
                     <a href="{{ route('admin.login') }}" class="btn-accent" style="padding: 0.45rem 1.15rem; font-size: 0.85rem;"><i class="fa-solid fa-lock" style="font-size: 0.75rem;"></i> Admin</a>
                 </li>
