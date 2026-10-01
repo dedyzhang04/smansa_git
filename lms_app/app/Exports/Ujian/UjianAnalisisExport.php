@@ -161,12 +161,9 @@ class UjianAnalisisExport implements FromArray, WithTitle, WithEvents, WithStric
         $this->kolomTerakhirA = 2 + $totalKolomA + 4; // +4: Jumlah, Rata-rata, L, TL
         $this->kolomTerakhirB = 2 + max($totalKolomB, 1);
 
-        // KKM/Tuntas/Tidak Tuntas SENGAJA sejajar dgn kolom Jumlah/L/TL Bagian A (bukan
-        // max(A,B)) — Bagian B bisa lebih lebar krn breakdown per-opsi/pasangan, tapi info
-        // box ini konsepnya "ringkasan Bagian A", jadi posisinya harus nempel di situ juga,
-        // tak boleh ikut terdorong jauh ke kanan oleh lebar Bagian B.
-        $kolLabelInfo = $this->kolomTerakhirA + 2;
-        $kolNilaiInfo = $kolLabelInfo + 2;
+                // KKM/Tuntas/Tidak Tuntas sejajar dgn kolom terakhir Bagian A
+        $kolLabelInfo = $this->kolomTerakhirA - 1;
+        $kolNilaiInfo = $kolLabelInfo + 1;
         $barisInfo = function (string $labelUtama, string $labelInfo, $nilaiInfo) use ($kolLabelInfo, $kolNilaiInfo) {
             $row = array_fill(0, $kolNilaiInfo, null);
             $row[0] = $labelUtama;
@@ -344,8 +341,8 @@ class UjianAnalisisExport implements FromArray, WithTitle, WithEvents, WithStric
                 $colB = Coordinate::stringFromColumnIndex($this->kolomTerakhirB);
                 $colMax = Coordinate::stringFromColumnIndex(max($this->kolomTerakhirA, $this->kolomTerakhirB));
 
-                $sheet->mergeCells("A{$this->rowJudul}:{$colMax}{$this->rowJudul}");
-                $sheet->mergeCells("A{$this->rowSub}:{$colMax}{$this->rowSub}");
+                $sheet->mergeCells("A{$this->rowJudul}:{$colA}{$this->rowJudul}");
+                $sheet->mergeCells("A{$this->rowSub}:{$colA}{$this->rowSub}");
                 $sheet->getStyle("A{$this->rowJudul}")->applyFromArray([
                     'font' => ['bold' => true, 'size' => 14, 'color' => ['rgb' => '1E293B']],
                     'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER],
@@ -402,11 +399,20 @@ class UjianAnalisisExport implements FromArray, WithTitle, WithEvents, WithStric
                 }
                 $sheet->freezePane('C' . $this->rowDataAwalA);
 
-                $sheet->getPageSetup()
+                                $sheet->getPageSetup()
                     ->setOrientation(PageSetup::ORIENTATION_LANDSCAPE)
-                    ->setPaperSize(PageSetup::PAPERSIZE_A4);
+                    ->setPaperSize(PageSetup::PAPERSIZE_A4)
+                    ->setFitToPage(true)
+                    ->setFitToWidth(1)
+                    ->setFitToHeight(0)
+                    ->setPrintArea("A1:{$colA}{$this->rowFooterPersen}");
                 $sheet->setBreak('A' . $this->rowSeksiB, Worksheet::BREAK_ROW);
             },
         ];
     }
 }
+
+
+
+
+

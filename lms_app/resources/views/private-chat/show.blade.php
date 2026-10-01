@@ -101,7 +101,18 @@ function privateChat(cfg) {
         init() {
             this.absorb(this.awal);
             this.$nextTick(() => { this.bottom(); window.lucide?.createIcons(); });
-            this.timer = setInterval(() => this.poll(), 4000);
+                        if (!window.simsPollingNonaktif('private_chat')) {
+                if (window.simsFirebase) {
+                    window.simsFirebase.onReady(fb => {
+                        const triggerRef = fb.getRef(`conversations/{{ $conversation->uuid }}/sync_trigger`);
+                        fb.onValue(triggerRef, (snapshot) => {
+                            if (snapshot.exists()) {
+                                this.poll();
+                            }
+                        });
+                    });
+                }
+            }
         },
         absorb(list) {
             for (const message of list || []) {

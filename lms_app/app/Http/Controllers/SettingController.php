@@ -43,6 +43,7 @@ class SettingController extends Controller
         'manage_rapat' => 'Mengelola Agenda Rapat (Notulen)',
         'manage_kaih' => 'Mengelola Kuesioner & Rekap 7 KAIH',
         'manage_ujian' => 'Membuat, Mengelola & Menilai Ujian (PTS/PAS/UAS/Harian)',
+        'manage_osis' => 'Mengelola Pemilihan Ketua OSIS (Paslon, Token QR, Live & Hasil)',
     ];
 
     public function index()
@@ -73,7 +74,8 @@ class SettingController extends Controller
         $request->validate([
             'semester_id' => 'required|exists:semesters,id',
         ]);
-        Semester::query()->update(['aktif' => false]);
+        Semester::query()->update(['aktif' => false]); // mass-update: tak memicu event model
+        Semester::clearCache();                          // wajib manual, pola sama RolePermission::clearCache()
         Semester::findOrFail($request->semester_id)->update(['aktif' => true]);
 
         return back()->with('success', 'Semester aktif diperbarui.');
@@ -412,6 +414,23 @@ class SettingController extends Controller
         Setting::set('agenda_wajib_pulang', $request->boolean('agenda_wajib_pulang') ? '1' : '0');
 
         return back()->with('success', 'Pengaturan agenda sebelum pulang disimpan.');
+    }
+
+    /**
+     * Performa Server: nonaktifkan polling widget SATU-PER-SATU (bukan satu tombol besar)
+     * — daftar kanonik & kelompoknya ada di App\Support\PollingWidget. Ujian yang sedang
+     * berjalan & pemantauan ruangan ujian TIDAK pernah masuk daftar ini, jadi tak pernah
+     * bisa dimatikan lewat sini.
+     * Berlaku utk tab yg dimuat/reload SETELAH disimpan (bukan instan ke tab yg sudah
+     * terbuka) — sengaja, supaya toggle-nya sendiri tak perlu polling status.
+     */
+    public function setPollingNonaktif(Request $request)
+    {
+        foreach (\App\Support\PollingWidget::kodeValid() as $kode) {
+            Setting::set(\App\Support\PollingWidget::settingKey($kode), $request->boolean($kode) ? '1' : '0');
+        }
+
+        return back()->with('success', 'Pengaturan performa server disimpan. Berlaku untuk tab yang dibuka/dimuat ulang setelah ini.');
     }
 
     /** Izinkan wali kelas melihat (read-only) nilai formatif/sumatif/PAS mapel lain di kelasnya. */

@@ -16,7 +16,7 @@ class Ujian extends Model
 
     protected $fillable = [
         'id_pelajaran', 'id_materi', 'id_ujian_paket', 'created_by', 'judul', 'instruksi', 'jenis',
-        'target_nilai', 'durasi_menit', 'acak_soal', 'acak_opsi', 'tampilkan_pembahasan', 'status',
+        'target_nilai', 'mode_skor', 'durasi_menit', 'acak_soal', 'acak_opsi', 'tampilkan_pembahasan', 'status',
     ];
 
     protected function casts(): array
@@ -49,15 +49,40 @@ class Ujian extends Model
         return $this->hasMany(UjianSoal::class, 'id_ujian', 'uuid')->orderBy('urutan');
     }
 
+    public function getCachedSoalDanOpsi()
+    {
+        return \Illuminate\Support\Facades\Cache::remember(
+            'ujian_' . $this->uuid . '_soal_opsi',
+            now()->addHours(6),
+            fn () => $this->soal()->with('opsi')->get()
+        );
+    }
+
+    public function clearSoalCache()
+    {
+        \Illuminate\Support\Facades\Cache::forget('ujian_' . $this->uuid . '_soal_opsi');
+    }
+
     public function kelas()
     {
         return $this->hasMany(UjianKelas::class, 'id_ujian', 'uuid');
+    }
+
+    public function susulans()
+    {
+        return $this->hasMany(UjianSusulan::class, 'id_ujian', 'uuid');
     }
 
     /** Paket (folder periode ujian, mis. "PAS Semester 1") — opsional, ujian standalone tetap sah tanpa ini. */
     public function paket()
     {
         return $this->belongsTo(UjianPaket::class, 'id_ujian_paket', 'uuid');
+    }
+
+    /** Ujian standalone (id_ujian_paket null, "Ulangan Harian" bebas guru) selalu mode 1 — tak pernah wajib scan. */
+    public function wajibScanQr(): bool
+    {
+        return (bool) ($this->paket?->wajib_scan_qr ?? false);
     }
 
     /** Baris jadwal (hari×jam) milik ujian ini — lihat UjianJadwalSync utk cara dipakai. */

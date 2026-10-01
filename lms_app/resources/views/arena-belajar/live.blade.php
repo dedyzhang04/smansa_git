@@ -368,6 +368,7 @@ function arenaLive(cfg) {
         timer: null,
         countdownTimer: null,
         countdown: null,
+        fbAttached: false,
         pollSeq: 0,
         pollMs: 4000,
         pollBackoffMs: 0,
@@ -390,8 +391,20 @@ function arenaLive(cfg) {
         boot() {
             this.initFs();
             if (!this.tokenReady) return;
-            this.poll();
-            this.timer = setInterval(() => this.poll(), this.pollMs);
+            this.poll(); // single initial fetch
+
+            // Pasang Firebase Listener untuk level Kuis (Lobby / menunggu session dibuat)
+            if (window.simsFirebase) {
+                window.simsFirebase.onReady(fb => {
+                    const lobbyRef = fb.getRef(`arena_quiz/{{ $quiz->uuid }}/sync_trigger`);
+                    fb.onValue(lobbyRef, (snapshot) => {
+                        if (snapshot.exists()) {
+                            this.poll();
+                        }
+                    });
+                });
+            }
+
             this.countdownTimer = setInterval(() => this.tickCountdown(), 1000);
             this.$nextTick(() => window.lucide && lucide.createIcons());
         },
@@ -417,33 +430,39 @@ function arenaLive(cfg) {
         async poll() {
             if (!this.tokenReady) return;
             const seq = ++this.pollSeq;
-            const now = Date.now();
-            const wantBoard = !this.lastBoardFetch
-                || (now - this.lastBoardFetch) >= 12000
-                || ['standings', 'ended'].includes(this.session?.status);
+            // state DAN leaderboard di-fetch TERPISAH (dulu digabung lewat Promise.all — kalau
+            // salah satu gagal/timeout, KEDUANYA gagal serentak, termasuk state yg sebetulnya
+            // baik-baik saja). Di bawah beban tinggi (banyak siswa live sekaligus), endpoint
+            // yg paling gampang lambat itu leaderboard (lebih berat) — dulu itu bisa bikin
+            // update status/soal ikut macet, kelihatan seperti siswa "nyangkut" di layar lama.
+            // Sekarang: leaderboard best-effort, gangguannya TAK menghalangi update state.
             try {
-                const fetches = [
-                    fetch(this.stateUrl, { headers: { Accept: 'application/json' } }),
-                ];
-                if (wantBoard) {
-                    fetches.push(fetch(this.boardUrl, { headers: { Accept: 'application/json' } }));
-                }
-                const results = await Promise.all(fetches);
+                const sRes = await fetch(this.stateUrl, { headers: { Accept: 'application/json' } });
                 if (seq !== this.pollSeq) return;
-                const sRes = results[0];
                 if (sRes.status === 429) {
                     this.scheduleBackoff(15000);
                     return;
                 }
                 if (sRes.status === 403) {
                     const err = await sRes.json().catch(() => ({}));
-                    if (err.requires_token) this.tokenReady = false;
+                    // Token gate cuma dianggap final SEBELUM pernah dapat session sama sekali.
+                    // Kalau ini muncul di tengah main (session sudah pernah terisi), lebih
+                    // mungkin hiccup sesaat di server (mis. session driver) drpd token dicabut
+                    // beneran — jangan matikan polling permanen, coba lagi siklus berikutnya.
+                    if (err.requires_token && !this.session) this.tokenReady = false;
                     return;
                 }
                 const sData = await sRes.json();
                 if (seq !== this.pollSeq) return;
                 const prevQ = this.session?.current_question_id;
                 this.session = sData.session;
+                this.setupFirebase();
+                if (this.session?.status === 'ended') {
+                    if (this.timer) {
+                        clearInterval(this.timer);
+                        this.timer = null;
+                    }
+                }
                 if (this.session?.current_question_id !== prevQ) {
                     this.selected = null;
                     this.selectedMulti = [];
@@ -455,30 +474,54 @@ function arenaLive(cfg) {
                     this.feedbackOk = null;
                     this.$nextTick(() => window.lucide && lucide.createIcons());
                 }
-                if (wantBoard && results[1]) {
-                    const bRes = results[1];
-                    if (bRes.status === 429) {
-                        this.scheduleBackoff(15000);
-                    } else if (bRes.ok) {
-                        const bData = await bRes.json();
-                        if (seq !== this.pollSeq) return;
-                        this.leaderboard = bData.leaderboard || [];
-                        this.me = bData.me;
-                        this.lastBoardFetch = now;
-                    }
-                }
                 if (this.pollBackoffMs > 0) this.pollBackoffMs = 0;
                 const focusRoot = document.getElementById('arena-focus-root');
                 if (focusRoot && this.session?.uuid) {
                     focusRoot.dataset.sessionId = this.session.uuid;
                 }
+            } catch (e) {
+                return; // state gagal — coba lagi siklus berikutnya, tapi tetap coba leaderboard di bawah.
+            }
+
+            const now = Date.now();
+            const wantBoard = !this.lastBoardFetch
+                || (now - this.lastBoardFetch) >= 12000
+                || ['standings', 'ended'].includes(this.session?.status);
+            if (!wantBoard) return;
+            try {
+                const bRes = await fetch(this.boardUrl, { headers: { Accept: 'application/json' } });
+                if (seq !== this.pollSeq) return;
+                if (bRes.status === 429) {
+                    this.scheduleBackoff(15000);
+                } else if (bRes.ok) {
+                    const bData = await bRes.json();
+                    if (seq !== this.pollSeq) return;
+                    this.leaderboard = bData.leaderboard || [];
+                    this.me = bData.me;
+                    this.lastBoardFetch = now;
+                }
             } catch (e) {}
+        },
+        setupFirebase() {
+            if (this.fbAttached) return;
+            if (!this.session || !this.session.id) return;
+            if (window.simsFirebase && !window.simsPollingNonaktif('arena_live')) {
+                window.simsFirebase.onReady(fb => {
+                    if (this.fbAttached) return;
+                    const triggerRef = fb.getRef(`arena/${this.session.id}/sync_trigger`);
+                    fb.onValue(triggerRef, (snapshot) => {
+                        if (snapshot.exists()) {
+                            this.poll();
+                        }
+                    });
+                    this.fbAttached = true;
+                });
+            }
         },
         scheduleBackoff(ms) {
             this.pollBackoffMs = ms;
             if (this.timer) clearInterval(this.timer);
             this.timer = setTimeout(() => {
-                this.timer = setInterval(() => this.poll(), this.pollMs);
                 this.poll();
             }, ms);
         },

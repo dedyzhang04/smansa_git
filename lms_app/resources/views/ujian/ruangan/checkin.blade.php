@@ -16,7 +16,18 @@
             <p class="text-slate-600 dark:text-slate-300"><span class="font-semibold">Status:</span> {{ $hadir->statusLabel() }}</p>
             <p class="text-slate-600 dark:text-slate-300"><span class="font-semibold">Pukul:</span> {{ $hadir->dicatat_pada?->translatedFormat('H:i, d M Y') }}</p>
         </div>
-        <p class="text-xs text-slate-400 pt-2">Anda boleh menutup halaman ini dan menunggu instruksi pengawas.</p>
+        @if($sesiList->count() > 1)
+        <div class="pt-2 border-t border-slate-100 dark:border-slate-700 text-xs text-left">
+            <p class="font-semibold text-slate-500 mb-1">Mapel yang bisa Anda ikuti hari ini:</p>
+            <ul class="list-disc list-inside text-slate-600 dark:text-slate-300 space-y-0.5">
+                @foreach($sesiList as $s)
+                <li>{{ $s->mapelNama() }}</li>
+                @endforeach
+            </ul>
+        </div>
+        @endif
+        <a href="{{ route('ujian.siswa.index') }}" class="inline-block w-full px-5 py-2.5 rounded-xl text-sm font-bold text-white mt-2" style="background:var(--cp)">Pilih Mata Pelajaran</a>
+        <p class="text-xs text-slate-400 pt-1">Atau tutup halaman ini dan tunggu instruksi pengawas.</p>
     </div>
 </div>
 @endsection

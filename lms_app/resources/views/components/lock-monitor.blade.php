@@ -71,7 +71,24 @@
             firstLoad = false; if (window.lucide) lucide.createIcons();
         } catch (e) {}
     }
-    poll(); setInterval(poll, 3000);
+    poll();
+    if (!window.simsPollingNonaktif('lock_monitor')) {
+        if (window.simsFirebase) {
+            window.simsFirebase.onReady(fb => {
+                const urlParts = url.split('/');
+                const uuid = urlParts[urlParts.length - 2]; 
+                // since URL is /materi/{uuid}/pemantauan, we can extract it.
+                if (uuid) {
+                    const triggerRef = fb.getRef('lock_monitor/' + uuid + '/sync_trigger');
+                    fb.onValue(triggerRef, (snapshot) => {
+                        if (snapshot.exists()) {
+                            poll();
+                        }
+                    });
+                }
+            });
+        }
+    }
 })();
 </script>
 @endpush

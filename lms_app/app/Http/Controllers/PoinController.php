@@ -141,29 +141,34 @@ class PoinController extends Controller
      */
     public static function hitungBulk(iterable $siswaUuids): array
     {
-        $rowsBySiswa = Poin::with('aturan')
-            ->whereIn('id_siswa', $siswaUuids)
-            ->orderBy('tanggal')->orderBy('created_at')
+        $uuids = is_array($siswaUuids) ? $siswaUuids : collect($siswaUuids)->toArray();
+        if (empty($uuids)) {
+            return [];
+        }
+
+        $aggregates = Poin::query()
+            ->join('aturan', 'poin.id_aturan', '=', 'aturan.uuid')
+            ->whereIn('poin.id_siswa', $uuids)
+            ->selectRaw("
+                poin.id_siswa,
+                SUM(CASE WHEN aturan.jenis = 'kurang' THEN -(aturan.poin) ELSE aturan.poin END) as delta_poin,
+                SUM(CASE WHEN aturan.jenis = 'tambah' THEN aturan.poin ELSE 0 END) as total_tambah,
+                COUNT(poin.uuid) as total_aktivitas
+            ")
+            ->groupBy('poin.id_siswa')
             ->get()
-            ->groupBy('id_siswa');
+            ->keyBy('id_siswa');
 
         $result = [];
-        foreach ($siswaUuids as $uuid) {
-            $rows = $rowsBySiswa->get($uuid, collect());
-            $sisa = 100;
-            $totalTambah = 0;
-            foreach ($rows as $r) {
-                $delta = $r->aturan?->jenis === 'kurang' ? -($r->aturan->poin ?? 0) : ($r->aturan->poin ?? 0);
-                $sisa += $delta;
-                if ($delta > 0) {
-                    $totalTambah += $delta;
-                }
-            }
+        foreach ($uuids as $uuid) {
+            $agg = $aggregates->get($uuid);
+            $sisa = 100 + ($agg ? (int) $agg->delta_poin : 0);
+            
             $result[$uuid] = [
                 'sisa' => $sisa,
-                'totalTambah' => $totalTambah,
+                'totalTambah' => $agg ? (int) $agg->total_tambah : 0,
                 'peringatan' => self::peringatan($sisa),
-                'adaAktivitas' => $rows->isNotEmpty(),
+                'adaAktivitas' => $agg ? $agg->total_aktivitas > 0 : false,
             ];
         }
 
@@ -186,7 +191,43 @@ class PoinController extends Controller
      */
     public static function top3Sekolah(): \Illuminate\Support\Collection
     {
-        return self::rankingAktif(Siswa::with('kelas')->get())->take(3)->values();
+        // Dipanggil di dashboard TIAP siswa/ortu — hasilnya sama utk semua, jadi di-cache
+        // (di-invalidasi otomatis tiap poin berubah lewat Poin::booted()). TTL 5 menit sbg
+        // jaring pengaman kalau ada jalur tulis yg entah bagaimana lewat dari event model.
+        return \Illuminate\Support\Facades\Cache::remember(
+            'poin:top3_sekolah',
+            now()->addMinutes(5),
+            function () {
+                $aggregates = Poin::query()
+                    ->join('aturan', 'poin.id_aturan', '=', 'aturan.uuid')
+                    ->join('siswa', 'poin.id_siswa', '=', 'siswa.uuid')
+                    ->selectRaw("
+                        poin.id_siswa,
+                        100 + SUM(CASE WHEN aturan.jenis = 'kurang' THEN -(aturan.poin) ELSE aturan.poin END) as sisa,
+                        SUM(CASE WHEN aturan.jenis = 'tambah' THEN aturan.poin ELSE 0 END) as total_tambah
+                    ")
+                    ->groupBy('poin.id_siswa')
+                    ->orderByDesc('sisa')
+                    ->orderByDesc('total_tambah')
+                    ->orderBy('siswa.nama', 'asc')
+                    ->limit(3)
+                    ->get();
+                
+                if ($aggregates->isEmpty()) return collect();
+                
+                $siswaUuids = $aggregates->pluck('id_siswa');
+                $siswas = Siswa::with('kelas')->whereIn('uuid', $siswaUuids)->get()->keyBy('uuid');
+                
+                return $aggregates->map(function ($agg) use ($siswas) {
+                    return [
+                        'siswa' => $siswas->get($agg->id_siswa),
+                        'sisa' => (int) $agg->sisa,
+                        'totalTambah' => (int) $agg->total_tambah,
+                        'adaAktivitas' => true,
+                    ];
+                })->filter(fn($r) => $r['siswa'] !== null)->values();
+            }
+        );
     }
 
     /** Urutkan siswa yang punya rekam jejak poin: sisa poin desc, lalu total tambah desc, lalu nama. */
@@ -529,19 +570,32 @@ class PoinController extends Controller
         $selKelas = $scope === 'kelas' ? ($request->kelas ?: optional($kelasList->first())->uuid) : null;
         $selTingkat = $scope === 'tingkat' ? ($request->filled('tingkat') ? (int) $request->tingkat : $tingkatList->first()) : null;
 
-        $query = Siswa::with('kelas');
-        if ($scope === 'kelas' && $selKelas) {
-            $query->where('id_kelas', $selKelas);
-        } elseif ($scope === 'tingkat' && $selTingkat !== null) {
-            $kelasIds = $kelasList->where('tingkat', $selTingkat)->pluck('uuid');
-            $query->whereIn('id_kelas', $kelasIds);
+        // Scope 'sekolah' memuat SEMUA siswa + SEMUA poin (rankingAktif) hanya utk top 10 —
+        // di-cache (invalidasi otomatis via Poin::booted()) krn hasilnya sama utk semua admin
+        // & jarang berubah. Scope kelas/tingkat sudah dibatasi query, biarkan langsung.
+        if ($scope === 'sekolah') {
+            $ranked = \Illuminate\Support\Facades\Cache::remember(
+                'poin:dashboard_sekolah',
+                now()->addMinutes(5),
+                fn () => self::rankingAktif(Siswa::with('kelas')->get())
+            );
+            $totalSiswa = Siswa::count();
+        } else {
+            $query = Siswa::with('kelas');
+            if ($scope === 'kelas' && $selKelas) {
+                $query->where('id_kelas', $selKelas);
+            } elseif ($scope === 'tingkat' && $selTingkat !== null) {
+                $kelasIds = $kelasList->where('tingkat', $selTingkat)->pluck('uuid');
+                $query->whereIn('id_kelas', $kelasIds);
+            }
+            $siswas = $query->get();
+            $ranked = self::rankingAktif($siswas);
+            $totalSiswa = $siswas->count();
         }
-        $siswas = $query->get();
-        $ranked = self::rankingAktif($siswas);
 
         return view('poin.dashboard', [
             'top10'      => $ranked->take(10)->values(),
-            'totalSiswa' => $siswas->count(),
+            'totalSiswa' => $totalSiswa,
             'scope'      => $scope,
             'kelasList'  => $kelasList,
             'tingkatList' => $tingkatList,

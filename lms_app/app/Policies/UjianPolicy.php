@@ -79,7 +79,25 @@ class UjianPolicy
             return false;
         }
 
-        return $ujianKelas->isOpenNow();
+        $ujian = $ujianKelas->ujian;
+        $isSusulanHariIni = \App\Models\UjianSusulan::where('id_ujian', $ujian->uuid)
+            ->where('id_siswa', $siswa->uuid)
+            ->whereDate('tanggal', now()->toDateString())
+            ->exists();
+
+        if (!$isSusulanHariIni) {
+            if (!$ujianKelas->isOpenNow()) {
+                return false;
+            }
+
+            // Defense-in-depth: gate ramah utamanya di UjianSiswaController::gate(), ini
+            // jaga-jaga kalau ada yg coba POST token langsung ke start() tanpa lewat gate().
+            if ($ujian?->wajibScanQr() && !$ujian->paket->sudahDicekSiswa($siswa)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     public function gradeEssay(User $user, Ujian $ujian): bool

@@ -28,9 +28,17 @@ class UjianGrader
     private function scoreSingleSelect(UjianSoal $soal, UjianJawaban $jawaban): array
     {
         $opsiBenar = $soal->opsi->firstWhere('is_benar', true);
+        $dijawab = !empty($jawaban->id_opsi_dipilih);
         $benar = $opsiBenar && $jawaban->id_opsi_dipilih === $opsiBenar->uuid;
 
-        return ['is_benar' => $benar, 'skor' => $benar ? $soal->poin : 0];
+        $skor = 0;
+        if ($benar) {
+            $skor = $soal->poin;
+        } elseif ($dijawab) {
+            $skor = (float) ($soal->meta['poin_salah'] ?? 0);
+        }
+
+        return ['is_benar' => $benar, 'skor' => $skor];
     }
 
     /**
@@ -48,16 +56,27 @@ class UjianGrader
         $benarUuids = $soal->opsi->where('is_benar', true)->pluck('uuid')->sort()->values();
         $dipilih = collect($jawaban->opsi_dipilih_multi ?? [])->sort()->values();
         $benar = $benarUuids->all() === $dipilih->all();
+        $dijawab = $dipilih->isNotEmpty();
 
         if ($soal->skor_mode === 'proporsional' && $benarUuids->isNotEmpty()) {
             $benarDipilih = $benarUuids->intersect($dipilih)->count();
             $skor = round($soal->poin * $benarDipilih, 2);
 
+            if (!$benar && $dijawab) {
+                $skor += (float) ($soal->meta['poin_salah'] ?? 0);
+            }
+
             return ['is_benar' => $benar, 'skor' => $skor];
         }
 
         // all_or_nothing (default): himpunan opsi terpilih harus PERSIS sama dgn opsi benar.
-        return ['is_benar' => $benar, 'skor' => $benar ? $soal->poinEfektif() : 0];
+        $skor = 0;
+        if ($benar) {
+            $skor = $soal->poinEfektif();
+        } elseif ($dijawab) {
+            $skor = (float) ($soal->meta['poin_salah'] ?? 0);
+        }
+        return ['is_benar' => $benar, 'skor' => $skor];
     }
 
     /** Sama semantik poin dgn scoreMultiSelect() (lihat komentar di sana) — proporsional: poin PER PASANGAN; all_or_nothing: poin TOTAL apa adanya. */
@@ -70,6 +89,7 @@ class UjianGrader
         }
 
         $jawabanPasangan = $jawaban->jawaban_pasangan ?? [];
+        $dijawab = !empty($jawabanPasangan);
         $benarCount = 0;
         foreach ($pairs as $p) {
             if (($jawabanPasangan[$p['left']] ?? null) === $p['right']) {
@@ -79,11 +99,20 @@ class UjianGrader
         $benar = $benarCount === $total;
 
         if ($soal->skor_mode === 'all_or_nothing') {
-            return ['is_benar' => $benar, 'skor' => $benar ? $soal->poinEfektif() : 0];
+            $skor = 0;
+            if ($benar) {
+                $skor = $soal->poinEfektif();
+            } elseif ($dijawab) {
+                $skor = (float) ($soal->meta['poin_salah'] ?? 0);
+            }
+            return ['is_benar' => $benar, 'skor' => $skor];
         }
 
-        // proporsional (default): poin × jumlah pasangan benar.
+        // proporsional (default): poin = jumlah pasangan benar.
         $skor = round($soal->poin * $benarCount, 2);
+        if (!$benar && $dijawab) {
+            $skor += (float) ($soal->meta['poin_salah'] ?? 0);
+        }
 
         return ['is_benar' => $benar, 'skor' => $skor];
     }
@@ -191,11 +220,22 @@ class UjianGrader
     }
 
     /**
-     * Hitung total_skor final, tutup attempt, transfer nilai otomatis. Cara menghitung
-     * total_skor ikut setting per-mapel (Pelajaran::mode_skor_ujian): 'rata_rata' (default,
-     * cara lama) menormalisasi ke skala 0-100 (skorTotal ÷ totalPoin × 100); 'jumlah'
-     * memakai total poin apa adanya (bisa >100 kalau total poin soal ujian ini >100).
+     * Normalisasi skor mentah ke skala final sesuai setting per-mapel (Pelajaran::
+     * mode_skor_ujian): 'rata_rata' (default) menormalisasi ke skala 0-100 (skor ÷
+     * totalPoin × 100); 'jumlah' memakai total poin apa adanya (bisa >100 kalau total
+     * poin soal ujian ini >100). Dipakai baik utk skor FINAL (finalisasi(), semua soal
+     * termasuk esai) maupun skor SEMENTARA (UjianAttempt::skorSementara(), esai msh 0)
+     * — skala HARUS sama persis di keduanya, supaya angkanya "naik" begitu esai selesai
+     * dinilai, bukan lompat skala.
      */
+    public static function normalisasiSkor(float $skorMentah, int $totalPoin, string $modeSkor): float
+    {
+        return $modeSkor === 'jumlah'
+            ? round($skorMentah, 2)
+            : ($totalPoin > 0 ? round($skorMentah / $totalPoin * 100, 2) : 0);
+    }
+
+    /** Hitung total_skor final, tutup attempt, transfer nilai otomatis. */
     private function finalisasi(UjianAttempt $attempt, $soalById = null, $jawabanList = null): void
     {
         $soalById ??= UjianSoal::where('id_ujian', $attempt->ujianKelas->ujian->uuid)->get()->keyBy('uuid');
@@ -203,11 +243,9 @@ class UjianGrader
 
         $skorTotal = $jawabanList->sum(fn ($j) => (float) $j->skor_diperoleh);
         $totalPoin = (int) $soalById->sum(fn (UjianSoal $s) => $s->poinEfektif());
-        $modeSkor = $attempt->ujianKelas->ujian->pelajaran?->mode_skor_ujian ?? 'rata_rata';
+        $modeSkor = $attempt->ujianKelas->ujian->mode_skor ?? 'rata_rata';
 
-        $totalSkorFinal = $modeSkor === 'jumlah'
-            ? round($skorTotal, 2)
-            : ($totalPoin > 0 ? round($skorTotal / $totalPoin * 100, 2) : 0);
+        $totalSkorFinal = self::normalisasiSkor($skorTotal, $totalPoin, $modeSkor);
 
         $attempt->update([
             'total_skor'             => $totalSkorFinal,
@@ -215,6 +253,10 @@ class UjianGrader
             'butuh_penilaian_manual' => false,
         ]);
 
-        app(UjianNilaiTransfer::class)->transfer($attempt->fresh());
+        // app(UjianNilaiTransfer::class)->transfer($attempt->fresh()); // Dinonaktifkan: Menggunakan tombol Transfer Semua secara massal
     }
 }
+
+
+
+

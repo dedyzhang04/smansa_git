@@ -19,10 +19,8 @@
     @php
         // Halaman kiosk publik (lihat EnsureKioskOrPermission) bisa dirender TANPA user login sama
         // sekali → $pref harus tetap objek valid (bukan null) agar semua akses $pref->xxx di bawah aman.
-        $pref = auth()->user()?->preference()->firstOrCreate(
-            ['user_uuid' => auth()->id()],
-            \App\Models\UserPreference::defaults()
-        ) ?? new \App\Models\UserPreference(\App\Models\UserPreference::defaults());
+        $pref = auth()->user()?->prefTampilan()
+            ?? new \App\Models\UserPreference(\App\Models\UserPreference::defaults());
         // Mode kiosk: sidebar/header/ticker disembunyikan. Dihitung PER-REQUEST dari variabel
         // $isKiosk yg dikirim controller (lihat AbsensiController::scan/QrAbsensiController::show),
         // BUKAN dari session — supaya membuka link kiosk tak pernah memengaruhi tab lain di
@@ -43,6 +41,10 @@
         // "Undefined variable" yg sama persis dgn $modulOn akan muncul lagi. Definisi di sini
         // menutup celah itu tanpa bergantung pada fallback yg gampang lupa.
         $activeGroups = [];
+        // Dihitung di sini (blok yg SELALU jalan, termasuk mode kios tanpa sidebar) — dipakai di
+        // 3 tempat (menu, item, skrip badge). Kalau didefinisikan di dalam <aside> saja, skrip
+        // badge grup di bawah (di luar aside) kena "Undefined variable" saat kios (bug nyata).
+        $grupChatTampil = auth()->user() ? \App\Support\GrupChatMenu::tampil(auth()->user()) : false;
         $navRegistry = [
             'dashboard' => [
                 'route'    => 'dashboard',
@@ -129,8 +131,14 @@
             || str_contains($path, 'poin/')
             || (str_contains($path, 'guru') && str_contains($path, 'pelajaran'))
             || str_contains($path, 'ngajar');
-        // Scan QR kamera (guru masuk ruang ujian) — cuma halaman daftar "Ruang Ujian Hari Ini".
-        $needsQrScanner = $path === 'ujian/ruangan-saya';
+        // Scan QR kamera — guru: daftar "Ruang Ujian Hari Ini"; siswa: "Ujian Saya" (tombol
+        // scan proaktif) & gerbang "ujian/{ujian}/mulai" (wall wajib-scan/gate token, keduanya
+        // pakai view yg sama <x-qr-scan-button>).
+        $needsQrScanner = $path === 'ujian/ruangan-saya'
+            || $path === 'ujian/saya'
+            || (str_starts_with($path, 'ujian/') && str_ends_with($path, '/mulai'));
+        // Chart hasil pemilihan OSIS — app ini belum py library chart JS lain, muat CDN cuma di sini.
+        $needsChartJs = str_starts_with($path, 'osis/') && str_contains($path, '/hasil');
         // Kiosk / scan: kurangi widget floating AI (R4.1).
         $isScanKioskSurface = (bool) ($isKiosk ?? false)
             || request()->routeIs([
@@ -167,6 +175,9 @@
     @if($needsQrScanner)
     <script defer src="https://cdn.jsdelivr.net/npm/qr-scanner@1.4.2/qr-scanner.umd.min.js"></script>
     @endif
+    @if($needsChartJs)
+    <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+    @endif
 
     {{-- Pin versi CDN (hindari @latest floating). Perf: jangan unduh versi tak terduga tiap hari. --}}
     <script defer src="https://unpkg.com/@alpinejs/collapse@3.14.8/dist/cdn.min.js"></script>
@@ -185,10 +196,22 @@
             if (typeof document !== 'undefined' && document.hidden) return;
             try { fn(); } catch (_) {}
         };
-        window.simsPollInterval = function (fn, ms) {
-            const id = setInterval(() => window.simsWhenVisible(fn), ms);
+        // Performa Server (admin, /settings tab "Performa Server"): daftar kode widget yg
+        // admin matikan satu-per-satu (App\Support\PollingWidget). Dibaca sekali per
+        // page-load — toggle admin berlaku ke tab yg dimuat/reload SETELAHNYA, bukan instan
+        // ke tab yg sudah terbuka (sengaja, biar toggle-nya sendiri tak perlu polling status).
+        window.SIMS_POLLING_NONAKTIF = @json(\App\Support\PollingWidget::daftarNonaktif());
+        window.simsPollingNonaktif = function (kode) {
+            return !!kode && window.SIMS_POLLING_NONAKTIF.includes(kode);
+        };
+        // kode: kode widget dari App\Support\PollingWidget — biarkan null/kosong utk polling
+        // yg TAK PERNAH boleh dimatikan lewat Performa Server (ujian berjalan, pemantauan
+        // ruangan ujian).
+        window.simsPollInterval = function (fn, ms, kode = null) {
+            const paused = () => window.simsPollingNonaktif(kode);
+            const id = setInterval(() => { if (!paused()) window.simsWhenVisible(fn); }, ms);
             document.addEventListener('visibilitychange', () => {
-                if (!document.hidden) window.simsWhenVisible(fn);
+                if (!document.hidden && !paused()) window.simsWhenVisible(fn);
             });
             return id;
         };
@@ -560,6 +583,8 @@
                 // Grup menu: key => [label, ikon, items[]]; item = [route, [pattern...], ikon, label]
                 // ModulAktif: on/off per sekolah dari Pengaturan → Fitur (default aktif).
                 $modulOn = fn (string $kode) => \App\Support\ModulAktif::aktif($kode);
+                // $grupChatTampil sudah dihitung sekali di blok @php paling atas (dipakai ulang di
+                // sini + skrip badge di bawah) — GrupChatMenu::tampil() query keanggotaan grup 1x.
                 $groups = [];
 
                 // ── Absensi (self-service: absen QR + absensi guru pribadi) ──
@@ -715,6 +740,9 @@
                     if (auth()->user()?->guru || $isAdmin || auth()->user()?->canAccess('manage_rapat') || in_array($access, ['kesiswaan','sarpras','kurikulum','kepala'])) {
                         $agendaItems[] = ['rapat.index', ['rapat.*'], 'users-round', 'Agenda Rapat'];
                     }
+                    if ($isAdmin) {
+                        $agendaItems[] = ['kegiatan.index', ['kegiatan.*'], 'calendar-check', 'Absensi Kegiatan'];
+                    }
                     if (!empty($agendaItems)) {
                         $groups['agenda'] = ['Agenda', 'notebook-pen', $agendaItems];
                     }
@@ -812,7 +840,8 @@
                 if (auth()->user()?->guru?->walikelas) {
                     $walikelasItems = [
                         ['walikelas.siswa.index', ['walikelas.siswa.*'], 'users-round', 'Data Siswa Kelas'],
-                        ['walikelas.sekretaris.form', ['walikelas.sekretaris.*'], 'user-cog', 'Set Sekretaris'],
+                                                ['walikelas.sekretaris.form', ['walikelas.sekretaris.*'], 'user-cog', 'Set Sekretaris'],
+                        ['walikelas.ruang_kelas.index', ['walikelas.ruang_kelas.*'], 'monitor-play', 'Pantau Tugas Ruang Kelas'],
                     ];
                     if ($modulOn('absensi')) {
                         // Digabung 1 menu (Absensi + Rekap + Daftar Wajah sudah saling ditautkan
@@ -913,6 +942,13 @@
                         $ujianItems[] = ['ujian.ruangan.saya', ['ujian.ruangan.*'], 'door-open', 'Ruang Ujian Hari Ini'];
                     }
                     $groups['ujian'] = ['Ujian', 'file-check-2', $ujianItems];
+                }
+
+                // ── Pemilihan OSIS (paslon, token QR, dashboard live, hasil) ──
+                if ($modulOn('osis') && ($isAdmin || auth()->user()?->canAccess('manage_osis'))) {
+                    $groups['osis'] = ['Pemilihan OSIS', 'award', [
+                        ['osis.index', ['osis.*'], 'award', 'Kelola Pemilihan'],
+                    ]];
                 }
 
                 // ── Cetak Data (export Excel: siswa, guru, kelas, absensi guru, agenda, nilai) ──
@@ -1061,7 +1097,7 @@
                 if ($modulOn('pengumuman')) {
                     $registerNav('pengumuman.index', ['pengumuman.*'], 'megaphone', 'Pengumuman');
                 }
-                if ($modulOn('grup_chat') && \App\Support\GrupChatMenu::tampil(auth()->user())) {
+                if ($modulOn('grup_chat') && $grupChatTampil) {
                     $registerNav('grup.index', ['grup.*'], 'users-round', 'Grup Chat');
                 }
                 $appDownloadOn = \App\Models\Setting::get('app_download_aktif') === '1'
@@ -1220,11 +1256,13 @@
             </a>
             @endif
 
+
+
             {{-- Grup Chat: tampil hanya bila user benar-benar anggota sebuah grup (atau pengelola).
                  JANGAN mendefinisikan variabel PHP di dalam blok @if($modulOn(...)) ini — variabel
                  yang lahir di dalam cabang modul lalu dipakai di luarnya pernah membuat dashboard
                  crash saat modulnya dimatikan (lihat ModulAktifTest). --}}
-            @if($modulOn('grup_chat') && \App\Support\GrupChatMenu::tampil(auth()->user()))
+            @if($modulOn('grup_chat') && $grupChatTampil)
             <a href="{{ route('grup.index') }}" data-tip="Grup Chat" class="nav-link relative flex items-center px-3 py-2.5 {{ request()->routeIs('grup.*') ? 'active' : '' }}" :class="mini ? 'justify-center' : 'gap-3'">
                 <i data-lucide="users-round" class="nav-icon w-[18px] h-[18px] flex-shrink-0"></i>
                 <span x-show="!mini" class="text-sm truncate flex-1">Grup Chat</span>
@@ -1811,7 +1849,7 @@
          x-transition:leave="transition ease-in duration-150"
          x-transition:leave-start="opacity-100 translate-y-0 scale-100"
          x-transition:leave-end="opacity-0 translate-y-3 scale-95"
-         class="fixed inset-0 z-[9990] w-screen h-screen h-[100dvh] origin-bottom-right overflow-hidden bg-white dark:bg-slate-900
+         class="fixed inset-0 z-[9990] w-full h-full h-[100dvh] origin-bottom-right overflow-hidden bg-white dark:bg-slate-900
                 sm:static sm:inset-auto sm:w-[380px] sm:h-[600px] sm:max-h-[80vh] sm:rounded-2xl sm:shadow-2xl sm:ring-1 sm:ring-slate-200 sm:dark:ring-slate-700">
         <iframe x-ref="frame" :src="loaded ? src : 'about:blank'"
                 class="w-full h-full border-0" title="Asisten Sekolah"></iframe>
@@ -1865,8 +1903,15 @@
                 window.addEventListener('message', (e) => {
                     if (e.data === 'chatfab:close') { this.open = false; this.poll(); }
                 });
-                this.poll();                                   // cek awal saat halaman dibuka
-                window.simsPollInterval(() => this.poll(), 20000); // pause saat tab hidden
+                // Tak polling sendiri lagi — badge numpang di response gabungan bel notifikasi
+                // (NotificationController::badgesLainnya()), dikirim lewat event 'notif-updated'.
+                // poll() manual TETAP dipakai saat panel ditutup (di atas) — itu aksi user, bukan
+                // polling berkala, jadi tak ikut Performa Server.
+                window.addEventListener('notif-updated', (e) => {
+                    if (this.open) return; // saat terbuka, widget mengurus state-nya sendiri
+                    if (window.simsPollingNonaktif('badge_chatbot')) return;
+                    this.unread = Number(e.detail?.chatbotUnread || 0);
+                });
             },
         }
     }
@@ -1926,11 +1971,9 @@
             darkMode: (localStorage.getItem('theme_mode') ?? '{{ $pref->theme_mode ?? 'light' }}') === 'dark',
             uiStyle: '{{ $pref->ui_style ?? 'soft' }}',
             adminChatUnread: 0,
-            adminChatBadgeTimer: null,
             pengumumanUnread: 0,
             grupUnread: 0,
             feedbackUnread: {{ (int) $feedbackUnreadCount }},
-            feedbackBadgeTimer: null,
             toggleCollapse(){ this.collapsed=!this.collapsed; localStorage.setItem('sb_collapsed', this.collapsed?'1':'0'); this.$nextTick(()=>lucide.createIcons()); },
             startSidebarResize(e){
                 if (this.isMobile) return;
@@ -1978,48 +2021,33 @@
                 });
                 this.$nextTick(()=>lucide.createIcons());
             },
+            // Badge chat-admin/masukan/grup: dulu tiap satu poll sendiri (fetch + interval
+            // terpisah, nembak bersamaan tiap halaman dimuat). Sekarang numpang di SATU
+            // response gabungan yg sama dgn bel notifikasi (NotificationController::
+            // badgesLainnya()) — komponen ini jadi murni pendengar event 'notif-updated',
+            // tak polling sendiri lagi sama sekali.
             initAdminChatBadge(){
                 @if($isAdmin)
-                const fetchBadge = async () => {
-                    try {
-                        const response = await fetch('{{ route('chatbot.admin.queue') }}', { headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' } });
-                        if (!response.ok) return;
-                        const data = await response.json();
-                        this.adminChatUnread = Math.max(Number(data.unread_count || 0), Number(data.waiting_count || 0));
-                    } catch (_) {}
-                };
-                fetchBadge();
-                if (!this.adminChatBadgeTimer) this.adminChatBadgeTimer = window.simsPollInterval(fetchBadge, 20000);
+                window.addEventListener('notif-updated', (e) => {
+                    if (window.simsPollingNonaktif('badge_chat_admin')) return;
+                    this.adminChatUnread = Number(e.detail?.adminChatUnread || 0);
+                });
                 @endif
             },
             initFeedbackBadge(){
                 @if($canManageFeedback)
-                const fetchBadge = async () => {
-                    try {
-                        const response = await fetch('{{ route('feedback.badge') }}', { headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' } });
-                        if (!response.ok) return;
-                        const data = await response.json();
-                        this.feedbackUnread = Number(data.new_count || 0);
-                    } catch (_) {}
-                };
-                fetchBadge();
-                if (!this.feedbackBadgeTimer) this.feedbackBadgeTimer = window.simsPollInterval(fetchBadge, 20000);
+                window.addEventListener('notif-updated', (e) => {
+                    if (window.simsPollingNonaktif('badge_masukan')) return;
+                    this.feedbackUnread = Number(e.detail?.feedbackUnread || 0);
+                });
                 @endif
             },
-            // Badge Grup Chat: murni aritmatika (last_seq - last_read_seq) di server,
-            // jadi poll 30 detik tetap murah walau sekolah punya puluhan grup.
             initGrupBadge(){
-                @if($modulOn('grup_chat') && \App\Support\GrupChatMenu::tampil(auth()->user()))
-                const fetchBadge = async () => {
-                    try {
-                        const response = await fetch('{{ route('grup.badge') }}', { headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' } });
-                        if (!response.ok) return;
-                        const data = await response.json();
-                        this.grupUnread = Number(data.unread || 0);
-                    } catch (_) {}
-                };
-                fetchBadge();
-                if (!this.grupBadgeTimer) this.grupBadgeTimer = window.simsPollInterval(fetchBadge, 30000);
+                @if($modulOn('grup_chat') && $grupChatTampil)
+                window.addEventListener('notif-updated', (e) => {
+                    if (window.simsPollingNonaktif('badge_grup')) return;
+                    this.grupUnread = Number(e.detail?.grupUnread || 0);
+                });
                 @endif
             },
             // Tooltip melayang utk ikon sidebar saat mode mini (anti-terpotong overflow).
@@ -2129,6 +2157,7 @@
                     if (!link) return;
                     const route = link.getAttribute('data-nav-route');
                     this.pushNavRecent(route);
+                    if (this.isMobile) this.mobileOpen = false;
                     this.$nextTick(() => lucide.createIcons());
                 });
             }
@@ -2150,9 +2179,26 @@
                     this.audio.preload = 'auto';
                     this.audio.volume = 0.6;
                 } catch (_) { this.audio = null; }
-                this.fetchNotifications();
-                // Polling 15s (was 10s); pause saat tab hidden (simsPollInterval)
-                window.simsPollInterval(() => this.fetchNotifications(), 15000);
+                // Performa Server: tahan juga fetch PERTAMA ini (bukan cuma pengulangannya) —
+                // inilah yg justru tembak tepat di detik-detik rawan (banyak orang login
+                // bersamaan), jauh sebelum interval sempat jalan. Mematikan 'notifikasi' ikut
+                // membekukan 4 badge yg numpang response ini (lihat App\Support\PollingWidget).
+                if (!window.simsPollingNonaktif('notifikasi')) this.fetchNotifications();
+                // Polling 45s (was 15s — endpoint ini request TERBANYAK di seluruh app, ~8.2rb/jam
+                // pas beban tinggi; notifikasi tak butuh sampai se-real-time itu, tunda beberapa
+                // puluh detik tak masalah) — pause saat tab hidden (simsPollInterval)
+                                if (!window.simsPollingNonaktif('notifikasi')) {
+                    if (window.simsFirebase) {
+                        window.simsFirebase.onReady(fb => {
+                            const triggerRef = fb.getRef(`users/{{ auth()->user()->uuid ?? '' }}/sync_trigger`);
+                            fb.onValue(triggerRef, (snapshot) => {
+                                if (snapshot.exists()) {
+                                    this.fetchNotifications();
+                                }
+                            });
+                        });
+                    }
+                }
             },
             async fetchNotifications() {
                 if (document.hidden) return;
@@ -2168,9 +2214,20 @@
                         }
                         this.prevUnread = data.unreadCount;
                         this.unreadCount = data.unreadCount;
-                        // Umpankan hitung pengumuman ke badge menu sidebar.
+                        // Umpankan hitung pengumuman + badge grup/chatbot/chat-admin/masukan ke
+                        // widget masing2 — respons ini SATU2NYA yg dipoll skrg, gantikan 4 fetch
+                        // terpisah yg dulu nembak bersamaan tiap halaman dimuat & tiap interval
+                        // (lihat NotificationController::badgesLainnya()). Widget yg tak relevan
+                        // utk role user ini tak pernah pasang listener-nya, jadi angka 0 default
+                        // di sini aman diabaikan.
                         window.dispatchEvent(new CustomEvent('notif-updated', {
-                            detail: { unreadPengumuman: Number(data.unreadPengumuman || 0) }
+                            detail: {
+                                unreadPengumuman: Number(data.unreadPengumuman || 0),
+                                grupUnread: Number(data.grupUnread || 0),
+                                chatbotUnread: Number(data.chatbotUnread || 0),
+                                adminChatUnread: Number(data.adminChatUnread || 0),
+                                feedbackUnread: Number(data.feedbackUnread || 0),
+                            }
                         }));
                         this.$nextTick(() => {
                             if (window.lucide) window.lucide.createIcons();
@@ -2272,6 +2329,7 @@
     // Pola fetch()+CSRF SAMA seperti simpan tata letak dashboard — tanpa mekanisme baru.
     window.registerFcmToken = function(token, deviceType) {
         if (!token) return;
+        if (sessionStorage.getItem('fcm_token_registered') === token) return;
         const meta = document.querySelector('meta[name="csrf-token"]');
         if (!meta || !meta.content) return;
         if (window.__mwFcmRegisterInFlight) return;
@@ -2292,6 +2350,7 @@
                 var j = null;
                 try { j = text ? JSON.parse(text) : null; } catch (eParse) {}
                 if (r.ok && j && j.ok === true) {
+                    sessionStorage.setItem('fcm_token_registered', token);
                     if (window.AndroidFcm && typeof AndroidFcm.onTokenRegistered === 'function') {
                         AndroidFcm.onTokenRegistered();
                     }
@@ -2323,6 +2382,7 @@
         // Saat logout, bersihkan flag di Android + hapus baris token user ini.
         document.querySelectorAll('form[action*="logout"]').forEach(function (form) {
             form.addEventListener('submit', function () {
+                sessionStorage.removeItem('fcm_token_registered');
                 var token = '';
                 try {
                     if (window.AndroidFcm && typeof AndroidFcm.getToken === 'function') {
@@ -2473,10 +2533,81 @@
         };
 
         // Update stats every 30s; pause when tab hidden
-        window.simsPollInterval(updateTickerStats, 30000);
+        window.simsPollInterval(updateTickerStats, 30000, 'ticker');
     });
 </script>
+
+
+@if(config('services.firebase.api_key') && config('services.firebase.database_url'))
+{{-- Firebase JS SDK & Realtime Database Initialization --}}
+<script>
+    // Sediakan helper global secara sinkron agar Alpine.js bisa mendaftar callback lebih awal
+    window.simsFirebase = {
+        db: null,
+        getRef: null, 
+        onValue: null, onChildAdded: null, onChildChanged: null, onChildRemoved: null, query: null, limitToLast: null,
+        ready: false,
+        callbacks: [],
+        onReady: function(cb) {
+            if (this.ready) cb(this);
+            else this.callbacks.push(cb);
+        }
+    };
+</script>
+<script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-app.js";
+    import { getDatabase, ref, onValue, onChildAdded, onChildChanged, onChildRemoved, query, limitToLast } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-database.js";
+    import { getAuth, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-auth.js";
+    
+    const firebaseConfig = {
+        apiKey: "{{ config('services.firebase.api_key') }}",
+        authDomain: "{{ config('services.firebase.project_id') }}.firebaseapp.com",
+        databaseURL: "{{ config('services.firebase.database_url') }}",
+        projectId: "{{ config('services.firebase.project_id') }}",
+        appId: "{{ config('services.firebase.app_id') }}"
+    };
+    
+    try {
+        const app = initializeApp(firebaseConfig);
+        const database = getDatabase(app);
+        const auth = getAuth(app);
+        
+        // Isi helper dengan instance asli (menggunakan closure untuk hindari masalah scope 'this')
+        window.simsFirebase.db = database;
+        window.simsFirebase.getRef = (path) => ref(database, path);
+        window.simsFirebase.onValue = (r, cb) => onValue(r, cb);
+        window.simsFirebase.onChildAdded = (r, cb) => onChildAdded(r, cb);
+        window.simsFirebase.onChildChanged = (r, cb) => onChildChanged(r, cb);
+        window.simsFirebase.onChildRemoved = (r, cb) => onChildRemoved(r, cb);
+        window.simsFirebase.query = (...args) => query(...args);
+        window.simsFirebase.limitToLast = (n) => limitToLast(n);
+
+        // Autentikasi dengan token dari Laravel
+        fetch("{{ route('firebase.token') }}", {
+            method: 'POST',
+            headers: {
+                'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').getAttribute('content'),
+                'Accept': 'application/json'
+            }
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (data.token) {
+                signInWithCustomToken(auth, data.token).then(() => {
+                    window.simsFirebase.ready = true;
+                    window.simsFirebase.callbacks.forEach(cb => cb(window.simsFirebase));
+                }).catch(error => {
+                    console.error("Firebase auth error:", error);
+                });
+            }
+        }).catch(e => console.error("Error fetching custom token:", e));
+    } catch (e) {
+        console.error("Firebase init error:", e);
+    }
+</script>
+@endif
 
 @stack('scripts')
 </body>
 </html>
+

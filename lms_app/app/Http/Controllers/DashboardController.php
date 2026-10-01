@@ -32,17 +32,32 @@ class DashboardController extends Controller
     {
         $user      = auth()->user();
         $semester  = Semester::aktif();
-        $pref      = $user->preference()->firstOrCreate(
-            ['user_uuid' => $user->uuid],
-            UserPreference::defaults()
-        );
+        $pref      = $user->prefTampilan(); // memo per-instance — reuse di dashboard.blade & layout
 
         $stats = [];
-        if (in_array($user->access, ['superadmin', 'admin', 'kepala'])) {
+        // Presensi guru hari ini: dihitung SEKALI di sini lalu di-share ke 4 blok dashboard
+        // (hadir/terlambat/tidak-hadir/belum) via view — dulu tiap blok query sendiri (4x identik).
+        // Blok tetap punya fallback `?? query` sbg jaring pengaman kalau var tak ter-share.
+        $rowsPresensiHariIni = null;
+        $totalGuru = null;
+        $kelasStats = null;
+        if (in_array($user->access, ['superadmin', 'admin', 'kepala', 'kurikulum', 'kesiswaan'])) {
+            $tickerStats = \App\Support\TickerStats::raw();
+            $totalGuru = $tickerStats['guru'];
+            $rowsPresensiHariIni = \App\Models\PresensiGuru::whereDate('tanggal', now()->toDateString())->get();
+            
+            // Optimization: Get classes with L/P counts to replace 5 separate queries in various dashboard blocks
+            $kelasStats = \App\Models\Kelas::withCount([
+                'siswa as siswa_l_count' => fn ($q) => $q->where('jk', 'L'),
+                'siswa as siswa_p_count' => fn ($q) => $q->where('jk', 'P'),
+            ])->orderBy('tingkat')->orderBy('kelas')->get();
+
             $stats = [
-                'total_siswa' => Siswa::count(),
-                'total_guru'  => Guru::count(),
-                'total_kelas' => Kelas::count(),
+                'total_siswa' => $kelasStats->sum('siswa_l_count') + $kelasStats->sum('siswa_p_count'),
+                'total_guru'  => $totalGuru,
+                'total_kelas' => $kelasStats->count(),
+                'siswa_l'     => $kelasStats->sum('siswa_l_count'),
+                'siswa_p'     => $kelasStats->sum('siswa_p_count'),
             ];
         }
 
@@ -53,12 +68,13 @@ class DashboardController extends Controller
         $sarpras = null;
         $sarprasRoles = ['superadmin', 'admin', 'kepala', 'sarpras'];
         if (UserRole::matches((string) $user->access, ...$sarprasRoles) && $user->can('sarpras.dashboard.lihat')) {
+            $tickerStats = \App\Support\TickerStats::raw();
             $sarpras = [
-                'totalAset'        => Aset::count(),
+                'totalAset'        => $tickerStats['aset'],
                 'nilaiTotalRp'     => Rupiah::format(Aset::sum('nilai_perolehan')),
-                'kerusakanTerbuka' => LaporanKerusakan::whereIn('status', ['dilaporkan', 'diterima'])->count(),
+                'kerusakanTerbuka' => $tickerStats['kerusakan'],
                 'kerusakanDarurat' => LaporanKerusakan::whereIn('status', ['dilaporkan', 'diterima'])->whereIn('urgensi', ['tinggi', 'darurat'])->count(),
-                'peminjamanAktif'  => Peminjaman::whereIn('status', ['dipinjam', 'terlambat'])->count(),
+                'peminjamanAktif'  => $tickerStats['peminjaman'],
                 'peminjamanMenunggu' => Peminjaman::where('status', 'diajukan')->count(),
                 'pengadaanPending' => Pengadaan::where('status', 'diajukan')->count(),
                 'pengadaanDisetujui' => Pengadaan::where('status', 'disetujui')->count(),
@@ -92,7 +108,7 @@ class DashboardController extends Controller
             ->get();
         }
 
-        return view('dashboard', compact('user', 'semester', 'pref', 'stats', 'sosmed', 'siswaWidget', 'sarpras', 'aiQuotaUsage', 'piketGuruTidakHadir'));
+        return view('dashboard', compact('user', 'semester', 'pref', 'stats', 'sosmed', 'siswaWidget', 'sarpras', 'aiQuotaUsage', 'piketGuruTidakHadir', 'rowsPresensiHariIni', 'totalGuru', 'kelasStats'));
     }
 
     /** Data widget dashboard khusus siswa: jadwal hari ini, poin/P3, absensi, podium sekolah. */
@@ -113,9 +129,21 @@ class DashboardController extends Controller
             ->whereDate('tanggal', now()->toDateString())
             ->first();
 
-        $absensiBulan = Absensi::where('id_siswa', $siswa->uuid)
-            ->whereBetween('tanggal', [now()->startOfMonth()->toDateString(), now()->endOfMonth()->toDateString()])
+        // $absensiBulan (bulan berjalan) & $riwayat60 (60 hari terakhir, dipakai utk streak di
+        // bawah) rentangnya tumpang-tindih — dulu 2 query terpisah menarik data yg sama 2x. Kini
+        // 1 query rentang gabungan [min(awalBulan, 60hariLalu) .. akhirBulan], lalu di-filter jadi
+        // dua view di memori. Pakai $now->copy() konsisten utk hindari mutasi objek Carbon.
+        $now = now();
+        $awalBulan2 = $now->copy()->startOfMonth();
+        $akhirBulan2 = $now->copy()->endOfMonth();
+        $batas60 = $now->copy()->subDays(60)->startOfDay();
+        $awalGabungan = $batas60->lt($awalBulan2) ? $batas60 : $awalBulan2;
+
+        $absensiGabungan = Absensi::where('id_siswa', $siswa->uuid)
+            ->whereBetween('tanggal', [$awalGabungan->toDateString(), $akhirBulan2->toDateString()])
             ->get()->keyBy(fn ($a) => $a->tanggal->format('Y-m-d'));
+
+        $absensiBulan = $absensiGabungan->filter(fn ($a) => $a->tanggal->betweenIncluded($awalBulan2, $akhirBulan2));
         $rekapAbsensi = [
             'hadir' => $absensiBulan->where('status', 'hadir')->count(),
             'izin'  => $absensiBulan->where('status', 'izin')->count(),
@@ -141,10 +169,10 @@ class DashboardController extends Controller
         }
         $offsetAwal = $awalBulan->dayOfWeekIso - 1; // 0 = Senin, kosongkan sel sebelum tanggal 1
 
-        // Streak hadir berturut-turut (mundur dari hari ini, akhir pekan dilewati tanpa memutus rentetan).
-        $riwayat60 = Absensi::where('id_siswa', $siswa->uuid)
-            ->where('tanggal', '>=', now()->subDays(60)->toDateString())
-            ->get()->keyBy(fn ($a) => $a->tanggal->format('Y-m-d'));
+        // Streak hadir berturut-turut (mundur dari hari ini, akhir pekan dilewati tanpa memutus
+        // rentetan). $riwayat60 diturunkan dari $absensiGabungan yg sudah ditarik di atas — tak
+        // query ulang. Streak cuma jalan mundur dari hari ini, jadi batas atas akhirBulan aman.
+        $riwayat60 = $absensiGabungan->filter(fn ($a) => $a->tanggal->gte($batas60));
         $streakHadir = 0;
         $cursor = now()->startOfDay();
         while (true) {

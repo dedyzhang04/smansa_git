@@ -1703,7 +1703,7 @@
                                 <span x-text="copiedMessageKey === geminiMessageKey(m) ? 'Tersalin' : 'Salin'"></span>
                             </button>
                             <button type="button"
-                                    x-show="arenaBelajarAktif && arenaClassrooms.length && looksLikeQuizDocument(m.text)"
+                                    x-show="arenaBelajarAktif && looksLikeQuizDocument(m.text)"
                                     @click="sendGeminiToArena(m)"
                                     :disabled="sendingArena"
                                     class="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-bold text-primary hover:bg-primary/10 disabled:opacity-50">
@@ -2461,7 +2461,7 @@
                         </button>
                         </div>
                         <div class="ai-toolbar-row" aria-label="Aksi lanjutan hasil">
-                        <button type="button" x-show="tab === 'quiz' && resultSource !== 'ocr' && arenaBelajarAktif && arenaClassrooms.length"
+                        <button type="button" x-show="tab === 'quiz' && resultSource !== 'ocr' && arenaBelajarAktif"
                                 @click="openSendToArena()" :disabled="sendingArena"
                                 class="ai-toolbar-btn ai-toolbar-btn--arena">
                             <i :data-lucide="sendingArena ? 'loader-circle' : 'gamepad-2'" class="w-4 h-4" :class="sendingArena ? 'animate-spin' : ''"></i>
@@ -2959,6 +2959,7 @@
             quotaTimer: null,
             arenaBelajarAktif: @js((bool) ($arenaBelajarAktif ?? false)),
             arenaClassrooms: @js($arenaClassrooms ?? []),
+            arenaClassroomsDiag: @js($arenaClassroomsDiag ?? null),
             arenaClassroomId: '',
             showArenaModal: false,
             sendingArena: false,
@@ -3713,11 +3714,8 @@
 
             startQuotaPolling() {
                 if (this.quotaTimer) clearInterval(this.quotaTimer);
-                // 15s (was 10s); skip tick saat tab hidden
-                this.quotaTimer = setInterval(() => {
-                    if (document.hidden) return;
-                    this.refreshQuota(false);
-                }, 15000);
+                // 15s; skip tick saat tab hidden; ikut mode darurat hemat server
+                this.quotaTimer = window.simsPollInterval(() => this.refreshQuota(false), 15000, 'kuota_ai_guru');
             },
 
             async refreshQuota(fresh = false) {
@@ -4469,9 +4467,17 @@
             },
 
             sendGeminiToArena(msg) {
-                if (!msg?.text || !this.arenaBelajarAktif || !this.arenaClassrooms.length || this.sendingArena) return;
+                if (!msg?.text || !this.arenaBelajarAktif || this.sendingArena) return;
+                
+                if (!this.arenaClassrooms || !this.arenaClassrooms.length) {
+                    this.error = 'Tidak ada Ruang Kelas yang bisa Anda kelola (berdasarkan setelan Jadwal Mengajar) untuk menerima kuis ini.';
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                    return;
+                }
+
                 if (!this.looksLikeQuizDocument(msg.text)) {
                     this.error = 'Jawaban ini belum berbentuk soal. Minta Nalar membuat soal (SOAL EVALUASI), atau buka di Generator Soal dulu.';
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
                     return;
                 }
                 this.result = msg.text;
@@ -4486,14 +4492,23 @@
             },
 
             openSendToArena(opts = {}) {
-                if (!this.result || !this.arenaBelajarAktif || !this.arenaClassrooms.length) return;
+                if (!this.result || !this.arenaBelajarAktif) return;
+                
+                if (!this.arenaClassrooms || !this.arenaClassrooms.length) {
+                    this.error = 'Tidak ada Ruang Kelas yang bisa Anda kelola (berdasarkan setelan Jadwal Mengajar) untuk menerima kuis ini.';
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                    return;
+                }
+
                 if (!this.looksLikeQuizDocument(this.result)) {
                     this.error = 'Teks hasil belum berbentuk soal yang bisa diimpor ke Arena.';
                     return;
                 }
                 if (this.tab === 'quiz' && this.resultSource !== 'ocr' && !this.qualityBatchCurrent()) {
+                    this.error = 'Silakan "Cek kualitas semua soal" terlebih dahulu sebelum mengirim ke Arena. Tombol cek ada di panel di bawah hasil ujian.';
                     this.qualityBatch.error = 'Cek kualitas semua soal terlebih dahulu. Pengiriman ke Arena baru dibuka setelah pemeriksaan selesai untuk hasil terbaru.';
                     this.qualityBatch.message = '';
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
                     return;
                 }
                 this._arenaFromNalar = !!opts.fromNalar || this.tab === 'gemini';
@@ -4510,8 +4525,10 @@
             sendToArena() {
                 if (!this.result || !this.arenaClassroomId || this.sendingArena) return;
                 if (this.tab === 'quiz' && this.resultSource !== 'ocr' && !this.qualityBatchCurrent()) {
+                    this.error = 'Silakan "Cek kualitas semua soal" terlebih dahulu sebelum mengirim ke Arena. Tombol cek ada di panel di bawah hasil ujian.';
                     this.qualityBatch.error = 'Cek kualitas semua soal terlebih dahulu sebelum mengirim ke Arena.';
                     this.showArenaModal = false;
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
                     return;
                 }
                 this.sendingArena = true;

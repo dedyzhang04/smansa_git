@@ -12,22 +12,47 @@
         <p class="text-sm text-slate-500 dark:text-slate-400 mt-0.5">Target nilai: {{ strtoupper($ujian->target_nilai) }} — nilai ditransfer otomatis begitu attempt selesai dinilai. Semua siswa kelas ter-assign ditampilkan, termasuk yang belum mengerjakan.</p>
     </div>
 
-    @if($ujianKelasList->count() > 1)
-    <form method="GET" action="{{ route('ujian.hasil.index', $ujian) }}" class="flex items-center gap-2">
-        <label class="text-xs font-semibold text-slate-500">Kelas:</label>
-        <select name="kelas" class="form-select py-1.5 text-sm w-auto" onchange="this.form.submit()">
-            <option value="" @selected(!$kelasFilter)>Semua kelas</option>
-            @foreach($ujianKelasList->sortBy(fn($uk) => [$uk->kelas?->tingkat, $uk->kelas?->kelas]) as $uk)
-                <option value="{{ $uk->id_kelas }}" @selected($kelasFilter === $uk->id_kelas)>{{ $uk->kelas?->tingkat }}{{ $uk->kelas?->kelas }}</option>
-            @endforeach
-        </select>
-    </form>
-    @endif
+    <div class="flex items-center justify-between flex-wrap gap-4 mb-4">
+        @if($ujianKelasList->count() > 1)
+        <form method="GET" action="{{ route('ujian.hasil.index', $ujian) }}" class="flex items-center gap-2">
+            <label class="text-xs font-semibold text-slate-500">Kelas:</label>
+            <select name="kelas" class="form-select py-1.5 text-sm w-auto" onchange="this.form.submit()">
+                <option value="" @selected(!$kelasFilter)>Semua kelas</option>
+                @foreach($ujianKelasList->sortBy(fn($uk) => [$uk->kelas?->tingkat, $uk->kelas?->kelas]) as $uk)
+                    <option value="{{ $uk->id_kelas }}" @selected($kelasFilter === $uk->id_kelas)>{{ $uk->kelas?->tingkat }}{{ $uk->kelas?->kelas }}</option>
+                @endforeach
+            </select>
+        </form>
+        @else
+        <div></div>
+        @endif
+
+        <div class="flex items-center flex-wrap gap-2">
+            <form method="POST" action="{{ route('ujian.hasil.paksaSelesaiSemua', $ujian) }}" onsubmit="return confirmAction(this, 'Kumpulkan secara paksa SEMUA siswa yang berstatus Sedang Mengerjakan? Mereka akan dinilai secara otomatis saat ini juga.', 'red')">
+                @csrf
+                <button type="submit" class="btn-primary bg-rose-500 hover:bg-rose-600 text-white px-4 py-1.5 rounded-lg text-sm font-semibold flex items-center gap-2">
+                    <i data-lucide="check-square" class="w-4 h-4"></i> Kumpul Semua
+                </button>
+            </form>
+            <form method="POST" action="{{ route('ujian.hasil.transferSemua', $ujian) }}?kelas={{ $kelasFilter }}" onsubmit="return confirmAction(this, 'Transfer nilai semua siswa yang sudah selesai dinilai ke buku nilai secara massal?', 'blue')">
+                @csrf
+                <button type="submit" class="btn-primary bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-1.5 rounded-lg text-sm font-semibold flex items-center gap-2">
+                    <i data-lucide="send" class="w-4 h-4"></i> Transfer Semua Nilai
+                </button>
+            </form>
+            <form method="POST" action="{{ route('ujian.hasil.resetSemua', $ujian) }}" onsubmit="return confirmAction(this, 'Hapus SELURUH hasil pengerjaan semua siswa? Siswa harus mengulang dari awal dan nilai yang sudah ditransfer ke buku nilai akan dicabut.', 'red')">
+                @csrf
+                <button type="submit" class="btn-primary bg-slate-800 hover:bg-slate-900 text-white px-4 py-1.5 rounded-lg text-sm font-semibold flex items-center gap-2">
+                    <i data-lucide="trash-2" class="w-4 h-4"></i> Reset Semua
+                </button>
+            </form>
+        </div>
+    </div>
 
     <div class="card overflow-hidden">
         <div class="overflow-x-auto">
         <table class="w-full text-sm">
-            <thead class="bg-slate-50 dark:bg-slate-700/40 text-xs text-slate-500 dark:text-slate-400">
+            <thead class="bg-slate-50 dark:bg-slate-700/40 text-xs text-slate-500 dark:text-slate-400 whitespace-nowrap">
                 <tr>
                     <th class="text-left px-4 py-2.5">Siswa</th>
                     <th class="text-left px-4 py-2.5">Kelas</th>
@@ -52,7 +77,15 @@
                             </span>
                         @endif
                     </td>
-                    <td class="px-4 py-2.5 font-mono">{{ $attempt?->status === 'dinilai' ? number_format($attempt->total_skor, 1) : '—' }}</td>
+                    <td class="px-4 py-2.5 font-mono">
+                        @php $skor = $attempt?->skorSementara($totalPoin, $modeSkor); @endphp
+                        @if($skor !== null)
+                            {{ number_format($skor, 1) }}
+                            @if($attempt->status !== 'dinilai')<span class="text-[10px] text-amber-500 font-sans font-normal">(sementara)</span>@endif
+                        @else
+                            —
+                        @endif
+                    </td>
                     <td class="px-4 py-2.5">
                         @if(!$attempt)
                             <span class="badge bg-slate-100 dark:bg-slate-700 text-slate-500">—</span>
@@ -70,6 +103,14 @@
                          sekaligus bisa muncul berbarengan di satu baris. title/aria-label
                          menjaga konteksnya tetap ada (tooltip hover + pembaca layar). --}}
                     <td class="px-4 py-2.5 text-right space-x-1 whitespace-nowrap">
+                        @if($attempt && $attempt->status === 'in_progress')
+                        <form method="POST" action="{{ route('ujian.hasil.paksaSelesai', [$ujian, $attempt]) }}" class="inline" onsubmit="return confirmAction(this, 'Kumpulkan paksa ujian {{ $siswa->nama }} sekarang? Semua jawaban yang tersimpan akan langsung dinilai.', 'red')">
+                            @csrf
+                            <button type="submit" title="Paksa Selesai & Nilai" aria-label="Paksa Selesai & Nilai" class="inline-flex p-1.5 rounded-lg text-rose-500 hover:bg-rose-500/10">
+                                <i data-lucide="check-square" class="w-4 h-4"></i>
+                            </button>
+                        </form>
+                        @endif
                         @if($attempt && $attempt->status === 'dinilai' && $attempt->status_transfer_nilai !== 'berhasil')
                         <form method="POST" action="{{ route('ujian.hasil.transferUlang', [$ujian, $attempt]) }}" class="inline">
                             @csrf
@@ -84,6 +125,15 @@
                             @csrf
                             <button type="submit" title="Buka Kembali Akses" aria-label="Buka Kembali Akses" class="inline-flex p-1.5 rounded-lg text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30">
                                 <i data-lucide="lock-open" class="w-4 h-4"></i>
+                            </button>
+                        </form>
+                        @endif
+                        @if($attempt && $attempt->status !== 'dibatalkan')
+                        <form method="POST" action="{{ route('ujian.monitor.resetAttempt', [$ujian, $attempt]) }}" class="inline"
+                              onsubmit="return confirmAction(this, 'Reset ulang ujian {{ $siswa->nama }}? Jawaban akan dihapus dan siswa bisa mengulang dari awal.', 'red')">
+                            @csrf
+                            <button type="submit" title="Reset Ulang" aria-label="Reset Ulang" class="inline-flex p-1.5 rounded-lg text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30">
+                                <i data-lucide="rotate-ccw" class="w-4 h-4"></i>
                             </button>
                         </form>
                         @endif
@@ -103,3 +153,4 @@
     </div>
 </div>
 @endsection
+

@@ -78,8 +78,8 @@ class AppServiceProvider extends ServiceProvider
             }
         }
 
-        // Bagikan nama & identitas sekolah ke layout & login (dari Pengaturan)
-        View::composer(['layouts.app', 'auth.login'], function ($view) {
+        // Bagikan nama & identitas sekolah ke layout, login, dan form kegiatan (dari Pengaturan)
+        View::composer(['layouts.app', 'auth.login', 'kegiatan.daftar', 'kegiatan.hadir'], function ($view) {
             $nama = 'Edutive';
             $alamat = null;
             $logoUrl = null;
@@ -133,5 +133,10 @@ class AppServiceProvider extends ServiceProvider
         // Popup "Apa yang Baru" kini dievaluasi langsung di view layout (via whats-new-modal)
         // memanfaatkan Cache yang jauh lebih ringan daripada mengandalkan flash session
         // yang sering "termakan" oleh middleware redirect.
+
+        Event::listen(
+            \Illuminate\Notifications\Events\NotificationSent::class,
+            \App\Listeners\PushFirebaseNotificationListener::class
+        );
     }
 }

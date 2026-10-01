@@ -31,17 +31,20 @@
      @copy.prevent @cut.prevent @paste.prevent @contextmenu.prevent
 >
     {{-- Overlay: wajib layar penuh sebelum mulai (gesture langsung dari klik). Disembunyikan
-         juga saat sudah terkunci ATAU sedang mengumpulkan — kalau tidak, overlay ini & overlay
+         juga saat sudah terkunci ATAU sedang mengumpulkan ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â kalau tidak, overlay ini & overlay
          "Ujian Terkunci"/"Mengumpulkan" di bawah bisa tampil bersamaan bertumpuk (semuanya
-         fixed inset-0, teks jadi bertabrakan) — exitFullscreen() saat submit bikin fsActive
+         fixed inset-0, teks jadi bertabrakan) ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â exitFullscreen() saat submit bikin fsActive
          balik false persis di titik ini. --}}
     <div x-show="!fsActive && !terkunci && !mengumpulkan" x-cloak class="fixed inset-0 z-[9999] bg-slate-900/95 flex items-center justify-center p-6 text-center">
         <div class="max-w-sm space-y-4">
             <i data-lucide="maximize" class="w-14 h-14 text-primary mx-auto"></i>
-            <h2 class="text-white text-lg font-bold m-0">Mode Ujian — Layar Penuh</h2>
+            <h2 class="text-white text-lg font-bold m-0">Mode Ujian - Layar Penuh</h2>
             <p class="text-slate-300 text-sm m-0 leading-relaxed">Ketuk tombol di bawah untuk masuk layar penuh dan memulai pengerjaan. Waktu sudah berjalan.</p>
             <button type="button" @click="masukLayarPenuh()" class="btn-primary px-6 py-3 rounded-xl text-sm font-bold inline-flex items-center gap-2">
                 <i data-lucide="maximize" class="w-4 h-4"></i> Masuk Layar Penuh
+            </button>
+            <button type="button" @click="lanjutTanpaLayarPenuh()" class="block mx-auto text-xs text-slate-400 hover:text-slate-200 underline">
+                HP tidak bisa masuk layar penuh? Lanjutkan tanpa layar penuh
             </button>
         </div>
     </div>
@@ -76,7 +79,7 @@
     <template x-for="(s, i) in soal" :key="'panel-'+s.uuid">
         <div x-show="i === idx" x-cloak class="card p-5 space-y-4">
             <div class="flex items-center justify-between">
-                <p class="text-xs text-slate-400">Soal <span x-text="i+1"></span> dari <span x-text="soal.length"></span> · <span x-text="s.poin"></span> poin</p>
+                <p class="text-xs text-slate-400">Soal <span x-text="i+1"></span> dari <span x-text="soal.length"></span> - <span x-text="s.poin"></span> poin</p>
             </div>
             <div class="text-sm font-medium text-slate-800 dark:text-slate-100 ujian-rich-body" x-html="s.teks_soal"></div>
 
@@ -86,7 +89,7 @@
                     <label class="flex items-center gap-2.5 p-3 rounded-xl border cursor-pointer"
                            :class="jawaban[s.uuid]===o.uuid ? 'border-primary bg-primary/5' : 'border-slate-200 dark:border-slate-600'">
                         <input type="radio" :name="'opt-'+s.uuid" :checked="jawaban[s.uuid]===o.uuid"
-                               @change="jawaban[s.uuid] = o.uuid; simpan(s.uuid)" class="text-primary focus:ring-primary flex-shrink-0">
+                               @change="jawaban[s.uuid] = o.uuid; tandaiBerubah(s.uuid)" class="text-primary focus:ring-primary flex-shrink-0">
                         <span class="text-sm ujian-rich-body" x-html="o.teks"></span>
                     </label>
                 </template>
@@ -99,7 +102,7 @@
                     <label class="flex items-center gap-2.5 p-3 rounded-xl border cursor-pointer"
                            :class="(jawaban[s.uuid]||[]).includes(o.uuid) ? 'border-primary bg-primary/5' : 'border-slate-200 dark:border-slate-600'">
                         <input type="checkbox" :checked="(jawaban[s.uuid]||[]).includes(o.uuid)"
-                               @change="toggleMulti(s.uuid, o.uuid); simpan(s.uuid)"
+                               @change="toggleMulti(s.uuid, o.uuid); tandaiBerubah(s.uuid)"
                                class="w-5 h-5 rounded-md border-2 border-slate-300 dark:border-slate-600 text-primary focus:ring-2 focus:ring-primary/30 transition cursor-pointer flex-shrink-0">
                         <span class="text-sm ujian-rich-body break-words min-w-0" x-html="o.teks"></span>
                     </label>
@@ -132,27 +135,35 @@
             {{-- essay --}}
             <div x-show="s.tipe==='essay'" x-cloak>
                 <textarea rows="6" class="form-input" placeholder="Tulis jawaban Anda di sini..."
-                          x-model="jawaban[s.uuid]" @input.debounce.900ms="simpan(s.uuid)"></textarea>
+                          x-model="jawaban[s.uuid]" @input="tandaiBerubah(s.uuid)"></textarea>
             </div>
 
             <div class="flex items-center justify-between pt-2">
-                <button type="button" @click="pindah(idx-1)" :disabled="idx===0" class="px-4 py-2 rounded-xl text-xs font-semibold border border-slate-200 dark:border-slate-600 disabled:opacity-30">← Sebelumnya</button>
-                <button type="button" x-show="idx < soal.length-1" @click="pindah(idx+1)" class="px-4 py-2 rounded-xl text-xs font-semibold border border-slate-200 dark:border-slate-600">Berikutnya →</button>
+                <button type="button" @click="pindah(idx-1)" :disabled="idx===0" class="px-4 py-2 rounded-xl text-xs font-semibold border border-slate-200 dark:border-slate-600 disabled:opacity-30">&larr; Sebelumnya</button>
+                <button type="button" x-show="idx < soal.length-1" @click="pindah(idx+1)" class="px-4 py-2 rounded-xl text-xs font-semibold border border-slate-200 dark:border-slate-600">Berikutnya &rarr;</button>
                 <button type="button" x-show="idx === soal.length-1" @click="konfirmasiSubmit()" class="px-5 py-2 rounded-xl text-xs font-bold bg-rose-600 text-white hover:bg-rose-700">Kumpulkan Ujian</button>
             </div>
         </div>
     </template>
 
-    {{-- Overlay mengumpulkan (submit normal/otomatis) — SENGAJA state TERPISAH dari
+    {{-- Overlay mengumpulkan (submit normal/otomatis) ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â SENGAJA state TERPISAH dari
          "terkunci" (pelanggaran). Sebelumnya kumpulkan() reuse kunci() yg sama dgn
          pelanggaran fullscreen/tab, jadi siswa yg menekan "Kumpulkan Ujian" secara SAH
-         sempat melihat overlay "Ujian Terkunci — Anda keluar dari layar penuh..." yg
+         sempat melihat overlay "Ujian Terkunci ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Anda keluar dari layar penuh..." yg
          menakutkan & salah konteks (makin kentara kalau fetch submit-nya agak lambat). --}}
     <div x-show="mengumpulkan" x-cloak class="fixed inset-0 z-[9999] bg-slate-900/95 flex items-center justify-center p-6 text-center">
         <div class="max-w-sm space-y-4">
             <i data-lucide="loader-circle" class="w-14 h-14 text-primary mx-auto animate-spin"></i>
-            <h2 class="text-white text-lg font-bold m-0">Mengumpulkan Ujian…</h2>
-            <p class="text-slate-300 text-sm m-0 leading-relaxed" x-text="mengumpulkanOtomatis ? 'Waktu ujian sudah habis — jawaban Anda sedang dikumpulkan otomatis.' : 'Mohon tunggu sebentar, jangan tutup halaman ini.'"></p>
+            <h2 class="text-white text-lg font-bold m-0">Mengumpulkan Ujian...</h2>
+            <p class="text-slate-300 text-sm m-0 leading-relaxed" x-text="mengumpulkanOtomatis ? 'Waktu ujian sudah habis - jawaban Anda sedang dikumpulkan otomatis.' : 'Mohon tunggu sebentar, jangan tutup halaman ini.'"></p>
+        </div>
+    </div>
+
+    {{-- Overlay loading 1.5 detik tiap perpindahan/menjawab (sesuai request) --}}
+    <div x-show="loadingBlock" x-cloak class="fixed inset-0 z-[99999] bg-slate-900/50 flex items-center justify-center p-6 text-center backdrop-blur-sm">
+        <div class="bg-white dark:bg-slate-800 p-6 rounded-2xl shadow-xl flex flex-col items-center gap-3">
+            <i data-lucide="loader-circle" class="w-10 h-10 text-primary animate-spin"></i>
+            <p class="text-slate-600 dark:text-slate-300 text-sm font-semibold m-0">Memproses...</p>
         </div>
     </div>
 
@@ -161,7 +172,10 @@
         <div class="max-w-sm space-y-4">
             <i data-lucide="lock" class="w-14 h-14 text-rose-400 mx-auto"></i>
             <h2 class="text-white text-lg font-bold m-0">Ujian Terkunci</h2>
-            <p class="text-slate-300 text-sm m-0 leading-relaxed">Anda keluar dari layar penuh atau berpindah tab. Hubungi guru/panitia untuk membuka kembali.</p>
+            <p class="text-slate-300 text-sm m-0 leading-relaxed">Anda keluar dari layar penuh atau berpindah tab. Hubungi guru/panitia untuk mereset, lalu muat ulang halaman ini.</p>
+            <button type="button" @click="window.location.reload()" class="btn-primary px-6 py-3 rounded-xl text-sm font-bold mt-4">
+                Muat Ulang Halaman
+            </button>
         </div>
     </div>
 </div>
@@ -196,14 +210,21 @@ function ujianKerjakan(cfg) {
         intentional: false,
         simpanStatus: '',
         simpanError: false,
+        loadingBlock: false,
+        _jawabanBerubah: {},
         _timerHandle: null,
+        
+        triggerBlock() {
+            this.loadingBlock = true;
+            setTimeout(() => { this.loadingBlock = false; }, 1500);
+        },
+        
         _statusHandle: null,
         _csrf: document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '',
 
         init() {
             this.tickCountdown();
             this._timerHandle = setInterval(() => this.tickCountdown(), 1000);
-            this._statusHandle = setInterval(() => this.cekStatus(), 15000);
 
             const syncFs = () => {
                 const on = !!(document.fullscreenElement || document.webkitFullscreenElement);
@@ -229,6 +250,18 @@ function ujianKerjakan(cfg) {
             }
         },
 
+        // Sebagian HP siswa gagal/menolak Fullscreen API (requestFullscreen() reject diam2,
+        // lihat catch() di atas) ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â tanpa jalan keluar ini siswa tsb terjebak permanen di
+        // overlay ini, tak pernah bisa mulai ujian sama sekali. `intentional` dipasang SEBELUM
+        // fsActive=true supaya syncFs() (yg jalan lewat event fullscreenchange kalau memang
+        // sempat browser sempat masuk fullscreen sebentar lalu gagal) tak salah lapor
+        // "keluar_fullscreen" akibat aksi ini sendiri.
+        lanjutTanpaLayarPenuh() {
+            this.intentional = true;
+            this.fsActive = true;
+            this.$nextTick(() => { this.intentional = false; });
+        },
+
         formatWaktu(detik) {
             detik = Math.max(0, detik);
             const j = Math.floor(detik / 3600);
@@ -246,36 +279,45 @@ function ujianKerjakan(cfg) {
                 this.kumpulkan(true);
             }
         },
-
         pindah(i) {
             if (i < 0 || i >= this.soal.length) return;
+            const currentUuid = this.soal[this.idx].uuid;
+            if (this._jawabanBerubah[currentUuid]) {
+                this._doSimpan(currentUuid);
+            }
             this.idx = i;
+            this.triggerBlock();
         },
 
         sudahDijawab(s) {
-            const v = this.jawaban[s.uuid];
-            if (s.tipe === 'mcq_complex') return Array.isArray(v) && v.length > 0;
-            if (s.tipe === 'match') return v && Object.keys(v).length > 0;
-            if (s.tipe === 'essay') return !!(v && String(v).trim().length);
-            return !!v;
+            const j = this.jawaban[s.uuid];
+            if (s.tipe === 'mcq_complex') return Array.isArray(j) && j.length > 0;
+            if (s.tipe === 'match') return j && Object.keys(j).length > 0;
+            return !!j;
         },
 
         toggleMulti(soalUuid, opsiUuid) {
-            const cur = this.jawaban[soalUuid] || [];
-            const i = cur.indexOf(opsiUuid);
-            if (i === -1) cur.push(opsiUuid); else cur.splice(i, 1);
-            this.jawaban[soalUuid] = cur;
+            let arr = this.jawaban[soalUuid] || [];
+            if (arr.includes(opsiUuid)) arr = arr.filter(x => x !== opsiUuid);
+            else arr.push(opsiUuid);
+            this.jawaban[soalUuid] = arr;
         },
 
         setPasangan(soalUuid, kiri, kanan) {
-            const cur = { ...(this.jawaban[soalUuid] || {}) };
-            if (kanan) cur[kiri] = kanan; else delete cur[kiri];
-            this.jawaban[soalUuid] = cur;
-            this.simpan(soalUuid);
+            let current = { ...(this.jawaban[soalUuid] || {}) };
+            if (kanan) current[kiri] = kanan; else delete current[kiri];
+            this.jawaban[soalUuid] = current;
+            this.tandaiBerubah(soalUuid);
         },
 
-        async simpan(soalUuid) {
-            if (this.terkunci || this.mengumpulkan) return;
+        tandaiBerubah(soalUuid) {
+            this._jawabanBerubah[soalUuid] = true;
+        },
+        async _doSimpan(soalUuid) {
+            if (this.terkunci) return;
+            
+            this._jawabanBerubah[soalUuid] = false;
+            
             const s = this.soal.find(x => x.uuid === soalUuid);
             if (!s) return;
             const payload = { id_soal: soalUuid };
@@ -290,13 +332,23 @@ function ujianKerjakan(cfg) {
                     headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-CSRF-TOKEN': this._csrf },
                     body: JSON.stringify(payload),
                 });
-                if (res.status === 403) { this.kunci(); return; }
+                
+                if (res.status === 403) { 
+                    const isJson = res.headers.get('content-type')?.includes('application/json');
+                    if (isJson) {
+                        this.kunci(); 
+                        return; 
+                    }
+                    throw new Error('WAF block (403 HTML)');
+                }
+                
                 if (!res.ok) throw new Error('gagal simpan');
                 this.simpanStatus = 'Tersimpan';
                 this.simpanError = false;
             } catch (e) {
-                this.simpanStatus = 'Gagal tersimpan — periksa koneksi';
+                this.simpanStatus = 'Gagal tersimpan - periksa koneksi';
                 this.simpanError = true;
+                this._jawabanBerubah[soalUuid] = true;
             }
         },
 
@@ -323,17 +375,6 @@ function ujianKerjakan(cfg) {
             clearInterval(this._statusHandle);
         },
 
-        async cekStatus() {
-            try {
-                const res = await fetch(cfg.urlStatus, { headers: { 'Accept': 'application/json' } });
-                if (!res.ok) return;
-                const data = await res.json();
-                if (data.batas_waktu_pada) this.batasWaktu = new Date(data.batas_waktu_pada).getTime();
-                if (data.dikunci) { this.kunci(); return; }
-                if (data.status !== 'in_progress') { window.location.href = cfg.urlTerkunci; }
-            } catch (e) {}
-        },
-
         konfirmasiSubmit() {
             const self = this;
             $.confirm({
@@ -349,10 +390,14 @@ function ujianKerjakan(cfg) {
                 },
             });
         },
-
         async kumpulkan(otomatis) {
-            // SENGAJA tak pakai kunci() di sini — kunci() menyalakan `terkunci` yg
-            // menampilkan overlay "Ujian Terkunci — Anda keluar dari layar penuh/berpindah
+            const currentUuid = this.soal[this.idx].uuid;
+            if (this._jawabanBerubah[currentUuid]) {
+                await this._doSimpan(currentUuid);
+            }
+
+            // SENGAJA tak pakai kunci() di sini ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â kunci() menyalakan `terkunci` yg
+            // menampilkan overlay "Ujian Terkunci ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Anda keluar dari layar penuh/berpindah
             // tab", pesan yg salah konteks (& menakutkan) utk submit yg SAH. `mengumpulkan`
             // adalah state terpisah dgn overlay netral sendiri (lihat kerjakan.blade.php).
             this.mengumpulkan = true;
@@ -364,10 +409,41 @@ function ujianKerjakan(cfg) {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-CSRF-TOKEN': this._csrf },
                 });
+                
+                // Jika error 503 (database busy) ATAU 403 HTML (diblokir WAF/ModSecurity hosting)
+                const isWafBlock = res.status === 403 && !res.headers.get('content-type')?.includes('application/json');
+                
+                if (res.status === 503 || isWafBlock) {
+                    this.mengumpulkan = false;
+                    $.alert({
+                        title: 'Server Sibuk / Terblokir',
+                        content: 'Koneksi Anda sempat ditolak oleh keamanan server (terlalu banyak siswa menekan bersamaan). Mohon klik Kumpulkan Ujian sekali lagi.',
+                        type: 'red'
+                    });
+                    // Nyalakan ulang timer jika tadinya berjalan
+                    this._timerHandle = setInterval(() => this.tickCountdown(), 1000);
+                    return;
+                }
+
                 if (document.fullscreenElement || document.webkitFullscreenElement) {
                     try { (document.exitFullscreen || document.webkitExitFullscreen)?.call(document); } catch (e) {}
                 }
-                if (res.redirected) { window.location.href = res.url; return; }
+                
+                if (res.redirected) { 
+                    window.location.href = res.url; 
+                    return; 
+                }
+                
+                if (res.ok) {
+                    try {
+                        const data = await res.json();
+                        if (data && data.redirect) {
+                            window.location.href = data.redirect;
+                            return;
+                        }
+                    } catch (err) {}
+                }
+                
                 window.location.href = cfg.urlTerkunci;
             } catch (e) {
                 window.location.href = cfg.urlTerkunci;
@@ -377,3 +453,12 @@ function ujianKerjakan(cfg) {
 }
 </script>
 @endpush
+
+
+
+
+
+
+
+
+

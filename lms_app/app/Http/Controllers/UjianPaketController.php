@@ -102,7 +102,9 @@ class UjianPaketController extends Controller implements HasMiddleware
             'tanggal_mulai'    => 'nullable|date',
             'tanggal_selesai'  => 'nullable|date|after_or_equal:tanggal_mulai',
             'status'           => 'required|in:draft,berjalan,selesai',
+            'wajib_scan_qr'    => 'nullable|boolean',
         ]);
+        $data['wajib_scan_qr'] = $request->boolean('wajib_scan_qr');
         $paket->update($data);
 
         return back()->with('success', 'Paket ujian diperbarui.');
@@ -136,5 +138,24 @@ class UjianPaketController extends Controller implements HasMiddleware
         $ujian->update(['id_ujian_paket' => null]);
 
         return back()->with('success', "Ujian \"{$ujian->judul}\" dilepas dari paket (tetap ada sbg ujian standalone).");
+    }
+
+    public function publishAll(Request $request, UjianPaket $paket)
+    {
+        abort_unless($this->bolehKelola($request->user(), $paket), 403);
+        
+        $count = 0;
+        foreach ($paket->ujian as $ujian) {
+            if ($ujian->status === 'draft' && $ujian->soal()->exists() && $ujian->kelas()->exists()) {
+                $ujian->update(['status' => 'published']);
+                $count++;
+            }
+        }
+
+        if ($count > 0) {
+            return back()->with('success', "$count ujian dalam paket berhasil diterbitkan.");
+        }
+        
+        return back()->with('error', 'Tidak ada ujian draf yang valid untuk diterbitkan (pastikan ujian memiliki soal dan kelas).');
     }
 }

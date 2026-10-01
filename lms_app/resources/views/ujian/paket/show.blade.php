@@ -24,7 +24,13 @@
                     @if($paket->tanggal_mulai){{ $paket->tanggal_mulai->translatedFormat('d M Y') }}@if($paket->tanggal_selesai) – {{ $paket->tanggal_selesai->translatedFormat('d M Y') }}@endif @endif
                 </p>
             </div>
-            <div class="flex items-center gap-2">
+            <div class="flex flex-wrap items-center gap-2">
+                <form method="POST" action="{{ route('ujian.paket.publishAll', $paket) }}" onsubmit="return confirmAction(this, 'Terbitkan SEMUA ujian draf dalam paket ini (yang sudah punya soal & kelas)?')">
+                    @csrf
+                    <button type="submit" class="px-4 py-2 rounded-xl text-sm font-bold bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm">
+                        <i data-lucide="send" class="w-4 h-4 inline mr-1"></i> Terbitkan Semua
+                    </button>
+                </form>
                 <button @click="editOpen = true" class="px-4 py-2 rounded-xl text-sm font-semibold border border-slate-200 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700">
                     <i data-lucide="pencil" class="w-4 h-4 inline"></i> Edit
                 </button>
@@ -143,8 +149,7 @@
             </div>
             <div>
                 <label class="block text-xs font-medium text-slate-500 mb-1">Tanggal</label>
-                <input type="date" name="tanggal" class="form-input py-1.5 text-sm" required
-                       min="{{ $paket->tanggal_mulai?->toDateString() }}" max="{{ $paket->tanggal_selesai?->toDateString() }}">
+                <input type="date" name="tanggal" class="form-input py-1.5 text-sm" required>
             </div>
             <div>
                 <label class="block text-xs font-medium text-slate-500 mb-1">Jam Mulai</label>
@@ -193,6 +198,27 @@
                         <option value="berjalan" @selected($paket->status==='berjalan')>Berjalan</option>
                         <option value="selesai" @selected($paket->status==='selesai')>Selesai</option>
                     </select>
+                </div>
+                <div class="rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 px-4 py-3"
+                     x-data="{ wajibScan: {{ $paket->wajib_scan_qr ? 'true' : 'false' }} }">
+                    <div class="flex items-start justify-between gap-4">
+                        <div class="min-w-0">
+                            <p class="text-sm font-semibold text-slate-700 dark:text-slate-200">Wajib Scan QR Sebelum Ujian</p>
+                            <p class="text-xs text-slate-400 mt-0.5 leading-relaxed" x-show="!wajibScan">
+                                Siswa langsung ke halaman ujian → pilih mapel → masukkan token → kerjakan. Tidak perlu scan QR sama sekali.
+                            </p>
+                            <p class="text-xs text-slate-400 mt-0.5 leading-relaxed" x-show="wajibScan" x-cloak>
+                                Siswa wajib scan QR ruangan dulu sebelum bisa memilih mapel ujian. Setelah scan SEKALI, siswa bisa mengikuti SEMUA ujian paket ini hari itu tanpa scan ulang per mapel.
+                            </p>
+                            <p class="text-xs text-amber-600 dark:text-amber-400 mt-1.5 leading-relaxed" x-show="wajibScan" x-cloak>
+                                <i data-lucide="alert-triangle" class="w-3 h-3 inline"></i> Pastikan ruangan &amp; peserta sudah diatur sebelum mengaktifkan — siswa yang belum terdaftar di ruangan manapun tidak akan bisa mengikuti ujian sama sekali.
+                            </p>
+                        </div>
+                        <label class="relative inline-flex items-center cursor-pointer flex-shrink-0 mt-1">
+                            <input type="checkbox" name="wajib_scan_qr" value="1" class="hidden peer" x-model="wajibScan">
+                            <div class="relative w-11 h-6 bg-slate-200 dark:bg-slate-600 rounded-full peer-checked:bg-[color:var(--cp)] transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition peer-checked:after:translate-x-5"></div>
+                        </label>
+                    </div>
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Semester</label>

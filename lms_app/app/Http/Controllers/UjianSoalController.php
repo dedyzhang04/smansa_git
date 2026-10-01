@@ -81,6 +81,7 @@ class UjianSoalController extends Controller
             ]);
 
             $this->simpanOpsi($soal, $data);
+            $ujian->clearSoalCache();
         });
 
         return back()->with('success', 'Soal ditambahkan.');
@@ -94,7 +95,7 @@ class UjianSoalController extends Controller
 
         $data = SoalValidator::validate($request);
 
-        DB::transaction(function () use ($soal, $data) {
+        DB::transaction(function () use ($soal, $data, $ujian) {
             $soal->update([
                 'tipe'       => $data['tipe'],
                 'teks_soal'  => $data['teks_soal'],
@@ -106,6 +107,7 @@ class UjianSoalController extends Controller
 
             $soal->opsi()->delete();
             $this->simpanOpsi($soal, $data);
+            $ujian->clearSoalCache();
         });
 
         return back()->with('success', 'Soal diperbarui.');
@@ -118,8 +120,25 @@ class UjianSoalController extends Controller
         abort_if($ujian->isPublished() || $ujian->isClosed(), 422, 'Ujian yang sudah terbit/ditutup tidak bisa diubah soalnya.');
 
         $soal->delete();
+        $ujian->clearSoalCache();
 
         return back()->with('success', 'Soal dihapus.');
+    }
+
+    public function data(Request $request, Ujian $ujian, UjianSoal $soal)
+    {
+        $this->authorize('manage', $ujian);
+        abort_unless($soal->id_ujian === $ujian->uuid, 404);
+
+        $soal->load('opsi');
+
+        return response()->json([
+            'teks_soal' => $soal->teks_soal,
+            'penjelasan' => $soal->penjelasan ?? '',
+            'kunci_esai' => $soal->meta['kunci_jawaban'] ?? '',
+            'opsi' => $soal->opsi->map(fn($o) => ['teks' => $o->teks_opsi, 'benar' => $o->is_benar]),
+            'pasangan' => ($soal->meta['pairs'] ?? []) ? collect($soal->meta['pairs'])->map(fn($p) => ['kiri'=>$p['left'],'kanan'=>$p['right']])->all() : []
+        ]);
     }
 
     public function reorder(Request $request, Ujian $ujian)
@@ -136,6 +155,7 @@ class UjianSoalController extends Controller
             foreach ($data['urutan'] as $i => $soalUuid) {
                 UjianSoal::where('id_ujian', $ujian->uuid)->where('uuid', $soalUuid)->update(['urutan' => $i + 1]);
             }
+            $ujian->clearSoalCache();
         });
 
         return back()->with('success', 'Urutan soal diperbarui.');

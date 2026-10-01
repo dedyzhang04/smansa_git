@@ -43,6 +43,43 @@ class UjianRuanganMonitorController extends Controller
             ->pluck('id_ujian')->unique()->all();
     }
 
+    /**
+     * SEMUA mapel + token hari ini utk PAKET ini (bukan cuma kelas yg kebetulan jadi
+     * peserta ruangan ini) — pengawas bisa bantu siswa tingkat/mapel apa pun yg ujian hari
+     * itu tanpa perlu minta guru mapel/admin. Token dikelompokkan per tingkat (bukan
+     * digabung rata) krn tiap tingkat py token beda (lihat "token per tingkat" di
+     * UjianKelas) — digabung jadi satu string malah bikin pengawas salah kasih token ke
+     * kelas yg salah.
+     */
+    private function tokenHariIni(UjianRuangan $ruangan): \Illuminate\Support\Collection
+    {
+        $idUjianHariIni = $this->idUjianHariIni($ruangan);
+        if (empty($idUjianHariIni)) {
+            return collect();
+        }
+
+        return UjianKelas::with(['ujian.pelajaran', 'kelas'])
+            ->whereIn('id_ujian', $idUjianHariIni)
+            ->get()
+            ->groupBy('id_ujian')
+            ->map(function ($grp) {
+                $perTingkat = $grp->groupBy(fn ($uk) => $uk->kelas?->tingkat)
+                    ->map(fn ($g, $tingkat) => [
+                        'tingkat' => $tingkat,
+                        'token'   => $g->pluck('token_masuk')->filter()->unique()->implode(', '),
+                    ])
+                    ->sortKeys()
+                    ->values();
+
+                return [
+                    'mapel'       => $grp->first()->ujian?->pelajaran?->nama ?? $grp->first()->ujian?->judul,
+                    'perTingkat'  => $perTingkat,
+                ];
+            })
+            ->sortBy('mapel')
+            ->values();
+    }
+
     /** Daftar ruangan yg boleh dimasuki guru TANPA scan fisik — semua ruangan yg py ujian dijadwalkan hari ini (siapa pun guru boleh masuk, lihat UjianRuanganPolicy::awasi()). */
     public function daftarRuanganSaya(Request $request)
     {
@@ -64,15 +101,26 @@ class UjianRuanganMonitorController extends Controller
     public function show(Request $request, UjianRuangan $ruangan)
     {
         $this->authorize('awasi', $ruangan);
-        $ruangan->load(['paket', 'peserta.siswa.kelas']);
+        // 'paket.ujian' ikut di-eager-load supaya $allUjianList di bawah tak lazy-load query terpisah.
+        $ruangan->load(['paket.ujian', 'peserta.siswa.kelas']);
 
         $sesiHariIni = $this->sesiHariIni($ruangan);
         $adaJadwalHariIni = $sesiHariIni->isNotEmpty();
         $guruList = Guru::orderBy('nama')->get();
         $baAdhocList = $this->baAdhocHariIni($ruangan);
         $allUjianList = $ruangan->paket->ujian ?? collect();
+        $tokenHariIni = $this->tokenHariIni($ruangan);
 
-        return view('ujian.ruangan.monitor', compact('ruangan', 'sesiHariIni', 'adaJadwalHariIni', 'guruList', 'baAdhocList', 'allUjianList'));
+        // Satu daftar gabungan terurut jam — tampilan TAK BOLEH bedakan "sesi terjadwal" vs
+        // "berita acara manual" (FL: tak mau ada konsep "ad-hoc" lagi). $sesiHariIni/
+        // $baAdhocList tetap dikirim terpisah krn loop modal-nya masih butuh dua sumber itu.
+        $agendaGabungan = $sesiHariIni->map(fn ($sesi) => [
+            'tipe' => 'sesi', 'sesi' => $sesi, 'ba' => $sesi->beritaAcara, 'jamMulai' => $sesi->jam_mulai,
+        ])->concat($baAdhocList->map(fn ($ba) => [
+            'tipe' => 'manual', 'sesi' => $ba->sesi, 'ba' => $ba, 'jamMulai' => $ba->sesi?->jam_mulai ?? $ba->jam_mulai_aktual ?? '99:99',
+        ]))->sortBy('jamMulai')->values();
+
+        return view('ujian.ruangan.monitor', compact('ruangan', 'sesiHariIni', 'adaJadwalHariIni', 'guruList', 'baAdhocList', 'allUjianList', 'tokenHariIni', 'agendaGabungan'));
     }
 
     /**
@@ -109,6 +157,14 @@ class UjianRuanganMonitorController extends Controller
             $sesi->hadirMap = ($hadirBySesi->get($sesi->uuid) ?? collect())->keyBy('id_siswa');
             $sesi->jumlahSeharusnya = $this->jumlahPesertaSeharusnya($ruangan, $sesi);
 
+            $auto = $this->autoHadirData($ruangan, $sesi->jadwal->pluck('id_ujian'));
+            $sesi->autoHadirMap = $auto['autoHadirMap'];
+            $sesi->jumlahHadirDefault = $auto['pesertaEligible']->filter(function ($p) use ($sesi) {
+                $existing = $sesi->hadirMap->get($p->id_siswa);
+                return $existing ? $existing->status === 'hadir' : (bool) $sesi->autoHadirMap->get($p->id_siswa);
+            })->count();
+            $sesi->jumlahTidakHadirDefault = max(0, $sesi->jumlahSeharusnya - $sesi->jumlahHadirDefault);
+
             return $sesi;
         });
     }
@@ -121,6 +177,48 @@ class UjianRuanganMonitorController extends Controller
         return $ruangan->peserta()->with('siswa')->get()
             ->filter(fn ($p) => $idKelasSesiIni->contains($p->siswa?->id_kelas))
             ->count();
+    }
+
+    /**
+     * Peserta eligible + peta "sudah hadir" fallback utk SATU sesi/BA (SATU query batch,
+     * bukan per-siswa) — dipakai isi awal Jumlah Hadir/Tidak Hadir & checklist Daftar Hadir
+     * supaya guru tak mulai dari nol. `$idUjianRelevan` = mapel yg dicakup (jadwal sesi
+     * terjadwal, atau ujianList BA manual).
+     *
+     * wajib_scan_qr=true: TAK PERLU fallback attempt sama sekali — UjianPolicy::take()
+     * sudah memblokir start() tanpa scan duluan, jadi attempt MUSTAHIL ada tanpa baris
+     * UjianDaftarHadir hasil scan (yg sudah dibaca caller lewat $sesi->hadirMap) duluan.
+     * wajib_scan_qr=false: siswa bisa langsung token tanpa scan sama sekali, jadi sinyal
+     * "hadir" satu-satunya yg tersedia adalah sudah MULAI mengerjakan (UjianAttempt ada) —
+     * dicocokkan via Siswa.id_login (BUKAN Siswa.uuid), sama persis pola poll() di atas.
+     */
+    private function autoHadirData(UjianRuangan $ruangan, \Illuminate\Support\Collection $idUjianRelevan): array
+    {
+        if ($idUjianRelevan->isEmpty()) {
+            return ['pesertaEligible' => collect(), 'autoHadirMap' => collect()];
+        }
+
+        $ujianKelasRelevan = UjianKelas::whereIn('id_ujian', $idUjianRelevan)->get(['uuid', 'id_kelas']);
+        $idKelasRelevan = $ujianKelasRelevan->pluck('id_kelas')->unique();
+        $pesertaEligible = $ruangan->peserta->filter(fn ($p) => $p->siswa && $idKelasRelevan->contains($p->siswa->id_kelas));
+
+        if ($ruangan->paket?->wajib_scan_qr) {
+            return ['pesertaEligible' => $pesertaEligible, 'autoHadirMap' => collect()];
+        }
+
+        $idLoginBySiswa = $pesertaEligible->pluck('siswa.id_login', 'siswa.uuid');
+        $idKelasPeserta = $pesertaEligible->pluck('siswa.id_kelas')->unique();
+        $idUjianKelasRelevan = $ujianKelasRelevan->whereIn('id_kelas', $idKelasPeserta)->pluck('uuid');
+
+        $idLoginSudahMulai = UjianAttempt::whereIn('id_ujian_kelas', $idUjianKelasRelevan)
+            ->where('status', '!=', UjianAttempt::STATUS_DIBATALKAN)
+            ->whereIn('id_siswa', $idLoginBySiswa->values()->filter())
+            ->pluck('id_siswa')->unique();
+
+        return [
+            'pesertaEligible' => $pesertaEligible,
+            'autoHadirMap' => $idLoginBySiswa->map(fn ($idLogin) => $idLogin && $idLoginSudahMulai->contains($idLogin)),
+        ];
     }
 
     /**
@@ -446,6 +544,15 @@ class UjianRuanganMonitorController extends Controller
         return $baList->map(function ($ba) use ($hadirHariIni, $ruangan) {
             $ba->hadirMap = clone $hadirHariIni;
             $ba->jumlahSeharusnya = $this->jumlahPesertaSeharusnyaAdhoc($ruangan, $ba);
+
+            $auto = $this->autoHadirData($ruangan, $ba->ujianList->pluck('uuid'));
+            $ba->autoHadirMap = $auto['autoHadirMap'];
+            $ba->jumlahHadirDefault = $auto['pesertaEligible']->filter(function ($p) use ($ba) {
+                $existing = $ba->hadirMap->get($p->id_siswa);
+                return $existing ? $existing->status === 'hadir' : (bool) $ba->autoHadirMap->get($p->id_siswa);
+            })->count();
+            $ba->jumlahTidakHadirDefault = max(0, $ba->jumlahSeharusnya - $ba->jumlahHadirDefault);
+
             return $ba;
         });
     }
@@ -510,7 +617,7 @@ class UjianRuanganMonitorController extends Controller
         abort_unless($sesi->id_ujian_paket === $ruangan->id_ujian_paket, 404);
         $ruangan->load(['paket.semester', 'peserta.siswa.kelas']);
 
-        $hadirBySiswa = UjianDaftarHadir::where('id_ruangan', $ruangan->uuid)->whereDate('tanggal', $sesi->tanggal->toDateString())->get()->keyBy('id_siswa');
+        $hadirBySiswa = UjianDaftarHadir::where('id_ruangan', $ruangan->uuid)->where('id_sesi', $sesi->uuid)->get()->keyBy('id_siswa');
 
         return \Barryvdh\DomPDF\Facade\Pdf::loadView('ujian.ruangan.hadirCetak', [
             'ruangan'      => $ruangan,

@@ -557,6 +557,7 @@
 
     function startPolling() {
         if (pollTimer) return;
+        if (window.simsPollingNonaktif('chatbot_widget')) return; // Performa Server: chatbot bubble tak wajib real-time
         pollTimer = setInterval(poll, pollEvery);
     }
     function stopPolling() {

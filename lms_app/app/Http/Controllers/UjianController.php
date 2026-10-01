@@ -19,6 +19,8 @@ use Illuminate\Http\Request;
 use Illuminate\Routing\Controllers\HasMiddleware;
 use Illuminate\Routing\Controllers\Middleware;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Validation\ValidationException;
 
 class UjianController extends Controller implements HasMiddleware
 {
@@ -38,11 +40,14 @@ class UjianController extends Controller implements HasMiddleware
     public function index(Request $request)
     {
         $user = $request->user();
-        $query = Ujian::withCount('soal')->with('pelajaran', 'kelas.kelas')->latest();
+        $query = Ujian::withCount('soal')
+            ->with(['pelajaran', 'kelas.kelas', 'paket'])
+            ->withExists('susulans')
+            ->latest();
 
         if (!$user->isAdmin() && !$user->canAccess('manage_ujian')) {
             $guru = $user->guru;
-            $pairs = Ngajar::where('id_guru', $guru?->uuid ?? '-')->get(['id_pelajaran', 'id_kelas']);
+            $pairs = \App\Models\Ngajar::where('id_guru', $guru?->uuid ?? '-')->get(['id_pelajaran', 'id_kelas']);
 
             $query->where(function ($q) use ($user, $pairs) {
                 $q->where('created_by', $user->uuid);
@@ -56,8 +61,18 @@ class UjianController extends Controller implements HasMiddleware
         }
 
         $ujians = $query->get();
+        
+        $groupedUjians = $ujians->groupBy(function ($ujian) {
+            if ($ujian->susulans_exists) {
+                return 'Jadwal Susulan Aktif';
+            }
+            if ($ujian->id_ujian_paket && $ujian->paket) {
+                return 'Paket: ' . $ujian->paket->nama;
+            }
+            return 'Tidak Dalam Paket';
+        });
 
-        return view('ujian.index', compact('ujians'));
+        return view('ujian.index', compact('groupedUjians'));
     }
 
     public function create(Request $request)
@@ -105,6 +120,7 @@ class UjianController extends Controller implements HasMiddleware
             'id_kelas'              => 'nullable|array',
             'id_kelas.*'            => 'uuid|exists:kelas,uuid',
             'durasi_menit'          => 'required|integer|min:5|max:600',
+            'mode_skor'             => 'required|in:rata_rata,akumulasi',
             'acak_soal'             => 'nullable|boolean',
             'acak_opsi'             => 'nullable|boolean',
             'tampilkan_pembahasan'  => 'nullable|boolean',
@@ -163,10 +179,12 @@ class UjianController extends Controller implements HasMiddleware
                 'instruksi'             => $data['instruksi'] ?? null,
                 'jenis'                 => $data['jenis'],
                 'target_nilai'          => $data['target_nilai'],
+                'mode_skor'             => $data['mode_skor'],
                 'durasi_menit'          => $data['durasi_menit'],
                 'acak_soal'             => $request->boolean('acak_soal', true),
                 'acak_opsi'             => $request->boolean('acak_opsi', true),
                 'tampilkan_pembahasan'  => $request->boolean('tampilkan_pembahasan', false),
+                'status'                => 'draft',
             ]);
 
             if (!empty($idKelas)) {
@@ -270,6 +288,7 @@ class UjianController extends Controller implements HasMiddleware
             'id_pelajaran'          => 'nullable|uuid|exists:pelajarans,uuid',
             'target_nilai'          => 'nullable|in:pts,pas',
             'durasi_menit'          => 'required|integer|min:5|max:600',
+            'mode_skor'             => 'required|in:rata_rata,akumulasi',
             'acak_soal'             => 'nullable|boolean',
             'acak_opsi'             => 'nullable|boolean',
             'tampilkan_pembahasan'  => 'nullable|boolean',
@@ -278,6 +297,7 @@ class UjianController extends Controller implements HasMiddleware
         $update = [
             'judul'                 => $data['judul'],
             'instruksi'             => $data['instruksi'] ?? null,
+            'mode_skor'             => $data['mode_skor'],
             // Guru biasa terkunci ke 'harian' (lihat catatan sama di store()) — cuma
             // admin/pengelola yang boleh ganti Jenis ke pts/pas/uas.
             'jenis'                 => $this->bolehAturKelas($request->user()) ? $data['jenis'] : 'harian',
@@ -394,11 +414,16 @@ class UjianController extends Controller implements HasMiddleware
 
             // Kalau cuma SATU guru yg beneran cocok (Ngajar) utk mapel+kelas ini, langsung
             // jadikan pengampu — tak ada ambiguitas jadi tak perlu dipilih manual admin.
-            // Kalau ada 2+, dibiarkan null, dipilih lewat panel "Guru Pengampu" di bawah.
             $guruMatch = Ngajar::where('id_pelajaran', $ujian->id_pelajaran)->where('id_kelas', $id)->pluck('id_guru');
             $pengampu = $guruMatch->unique()->count() === 1 ? $guruMatch->first() : null;
 
-            UjianKelas::create(['id_ujian' => $ujian->uuid, 'id_kelas' => $id, 'token_masuk' => $token, 'id_guru_pengampu' => $pengampu]);
+            UjianKelas::create([
+                'id_ujian' => $ujian->uuid, 
+                'id_kelas' => $id, 
+                'token_masuk' => $token, 
+                'id_guru_pengampu' => $pengampu,
+                'status' => 'standby'
+            ]);
         }
         // Kelas yg tidak lagi dipilih dilepas — aman selama belum ada attempt (FK cascade
         // akan ikut menghapus attempt jika ada; UI harus memperingatkan sebelum submit).
@@ -576,9 +601,37 @@ class UjianController extends Controller implements HasMiddleware
             : 'Pembahasan disembunyikan kembali dari siswa.');
     }
 
+        public function resetTotal(Request $request, Ujian $ujian)
+    {
+        $this->authorize('manage', $ujian);
+        
+        if (!Hash::check($request->password, auth()->user()->password)) {
+            throw ValidationException::withMessages(['password' => 'Password tidak valid.']);
+        }
+        
+        $attempts = UjianAttempt::whereIn('id_ujian_kelas', $ujian->kelas()->pluck('uuid'))->get();
+        $count = 0;
+        
+        DB::transaction(function () use ($attempts, &$count) {
+            foreach ($attempts as $attempt) {
+                // Jangan panggil $transfer->revert($attempt) di sini agar nilai di buku nilai tetap aman
+                $attempt->delete();
+                $count++;
+            }
+        });
+        
+        return back()->with('success', "Seluruh data pengerjaan ({$count} siswa) berhasil dihapus permanen. Ujian kembali seperti semula.");
+    }
+
     public function destroy(Request $request, Ujian $ujian)
     {
         $this->authorize('manage', $ujian);
+        
+        $request->validate(['password' => 'required|string']);
+        if (!\Illuminate\Support\Facades\Hash::check($request->password, auth()->user()->password)) {
+            throw \Illuminate\Validation\ValidationException::withMessages(['password' => 'Password tidak valid.']);
+        }
+
         abort_if($ujian->isPublished(), 422, 'Tutup ujian dulu sebelum menghapusnya.');
 
         $ujian->delete();
@@ -603,7 +656,12 @@ class UjianController extends Controller implements HasMiddleware
 
         $roster = $rosterService->untukKelas($untukRoster);
 
-        return view('ujian.hasil.index', compact('ujian', 'ujianKelasList', 'roster', 'kelasFilter'));
+        // Dihitung SEKALI di sini (bukan per-baris di view) supaya skorSementara() tak N+1
+        // ke ujian_soal utk tiap siswa di roster — lihat UjianAttempt::skorSementara().
+        $totalPoin = (int) $ujian->soal->sum(fn ($s) => $s->poinEfektif());
+        $modeSkor = $ujian->mode_skor ?? 'rata_rata';
+
+        return view('ujian.hasil.index', compact('ujian', 'ujianKelasList', 'roster', 'kelasFilter', 'totalPoin', 'modeSkor'));
     }
 
     /** Rincian jawaban per-soal satu siswa — dipakai dari baris roster Hasil & Transfer/Pemantauan. */
@@ -620,13 +678,17 @@ class UjianController extends Controller implements HasMiddleware
 
         $siswaProfil = Siswa::where('id_login', $siswa->uuid)->first();
         $jawabanBySoal = collect();
+        $totalPoin = 0;
+        $modeSkor = 'rata_rata';
 
         if ($attempt) {
             $ujian->load(['soal' => fn ($q) => $q->orderBy('urutan'), 'soal.opsi']);
             $jawabanBySoal = UjianJawaban::where('id_attempt', $attempt->uuid)->get()->keyBy('id_soal');
+            $totalPoin = (int) $ujian->soal->sum(fn ($s) => $s->poinEfektif());
+            $modeSkor = $ujian->mode_skor ?? 'rata_rata';
         }
 
-        return view('ujian.hasil.detail', compact('ujian', 'attempt', 'siswaProfil', 'jawabanBySoal'));
+        return view('ujian.hasil.detail', compact('ujian', 'attempt', 'siswaProfil', 'jawabanBySoal', 'totalPoin', 'modeSkor'));
     }
 
     /**
@@ -634,6 +696,32 @@ class UjianController extends Controller implements HasMiddleware
      * transfer otomatis sebelumnya gagal krn rapor terkunci, dan admin memang sudah
      * sadar membuka kunci itu utk memasukkan nilai ini.
      */
+        public function transferSemua(Request $request, Ujian $ujian, UjianNilaiTransfer $transfer)
+    {
+        $this->authorize('manage', $ujian);
+        
+        $kelasFilter = $request->string('kelas')->toString();
+        
+        $query = UjianAttempt::whereIn('id_ujian_kelas', $ujian->kelas()->pluck('uuid'))
+            ->where('status', UjianAttempt::STATUS_DINILAI);
+            
+        if ($kelasFilter) {
+            $query->whereHas('ujianKelas', function ($q) use ($kelasFilter) {
+                $q->where('id_kelas', $kelasFilter);
+            });
+        }
+        
+        $attempts = $query->get();
+        $count = 0;
+        
+        foreach ($attempts as $attempt) {
+            $transfer->transfer($attempt);
+            $count++;
+        }
+        
+        return back()->with('success', "Berhasil memproses transfer nilai untuk {} siswa.");
+    }
+
     public function transferUlang(Request $request, Ujian $ujian, UjianAttempt $attempt, UjianNilaiTransfer $transfer)
     {
         $this->authorize('manage', $ujian);
@@ -643,6 +731,55 @@ class UjianController extends Controller implements HasMiddleware
         $transfer->transfer($attempt);
 
         return back()->with('success', 'Transfer nilai dicoba ulang — status: ' . $attempt->fresh()->status_transfer_nilai);
+    }
+
+    public function paksaSelesai(Request $request, Ujian $ujian, UjianAttempt $attempt)
+    {
+        $this->authorize('manage', $ujian);
+        abort_unless($attempt->ujianKelas->id_ujian === $ujian->uuid, 404);
+        abort_unless($attempt->status === UjianAttempt::STATUS_IN_PROGRESS, 422, 'Siswa tidak sedang mengerjakan.');
+
+        $grader = app(\App\Services\UjianGrader::class);
+        $grader->autoSubmitKarenaWaktuHabis($attempt);
+
+        UjianPelanggaran::create(['id_attempt' => $attempt->uuid, 'id_siswa' => $attempt->id_siswa, 'tipe' => 'diselesaikan_paksa_admin']);
+
+        return back()->with('success', 'Ujian siswa berhasil diselesaikan secara paksa.');
+    }
+
+    public function paksaSelesaiSemua(Request $request, Ujian $ujian)
+    {
+        $this->authorize('manage', $ujian);
+        $attempts = UjianAttempt::whereIn('id_ujian_kelas', $ujian->kelas()->pluck('uuid'))
+            ->where('status', UjianAttempt::STATUS_IN_PROGRESS)
+            ->get();
+        
+        $grader = app(\App\Services\UjianGrader::class);
+        $count = 0;
+        foreach ($attempts as $attempt) {
+            $grader->autoSubmitKarenaWaktuHabis($attempt);
+            UjianPelanggaran::create(['id_attempt' => $attempt->uuid, 'id_siswa' => $attempt->id_siswa, 'tipe' => 'diselesaikan_paksa_admin']);
+            $count++;
+        }
+
+        return back()->with('success', "$count siswa yang sedang mengerjakan berhasil diselesaikan secara paksa.");
+    }
+
+    public function resetSemua(Request $request, Ujian $ujian, UjianNilaiTransfer $transfer)
+    {
+        $this->authorize('manage', $ujian);
+        $attempts = UjianAttempt::whereIn('id_ujian_kelas', $ujian->kelas()->pluck('uuid'))->get();
+        
+        $count = 0;
+        DB::transaction(function () use ($attempts, &$count) {
+            foreach ($attempts as $attempt) {
+                // Jangan panggil $transfer->revert($attempt) di sini agar nilai di buku nilai tetap aman
+                $attempt->delete();
+                $count++;
+            }
+        });
+
+        return back()->with('success', "$count data ujian siswa berhasil direset secara massal. Mereka bisa mulai ujian dari awal.");
     }
 
     /**
@@ -710,3 +847,9 @@ class UjianController extends Controller implements HasMiddleware
         return [$ngajars];
     }
 }
+
+
+
+
+
+

@@ -3,16 +3,20 @@
 namespace App\Http\Controllers;
 
 use App\Http\Controllers\Concerns\HandlesClassroomUploads;
+use App\Http\Controllers\Concerns\HandlesContentLock;
 use App\Http\Requests\GradeClassroomSubmissionRequest;
 use App\Http\Requests\StoreClassroomSubmissionRequest;
 use App\Models\ClassroomAssignment;
 use App\Models\ClassroomSubmission;
 use App\Models\ClassroomSubmissionFile;
 use App\Support\Audit;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 
 class ClassroomSubmissionController extends Controller implements \Illuminate\Routing\Controllers\HasMiddleware
 {
+    use HandlesClassroomUploads, HandlesContentLock;
+
     public static function middleware(): array
     {
         return [
@@ -28,7 +32,13 @@ class ClassroomSubmissionController extends Controller implements \Illuminate\Ro
     /** Siswa mengumpulkan tugas (boleh banyak file). */
     public function store(StoreClassroomSubmissionRequest $request, ClassroomAssignment $assignment)
     {
-        $classroom = $assignment->classroom;
+        // Satu tugas bisa ditaut ke BANYAK kelas (classroom_assignment_links) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â resolveClassroom()
+        // (dr HandlesContentLock, dipakai jg oleh show/download/lock) cari dulu kelas yg ditaut &
+        // cocok dgn id_kelas siswa ini, baru fallback ke $assignment->classroom (kelas asal). Dulu
+        // di sini langsung pakai $assignment->classroom mentah2 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â siswa yg akses tugas ini lewat
+        // kelasnya SENDIRI (bukan kelas asal tempat tugas dibuat) kena 403 walau keanggotÂ·nnya di
+        // kelasnya sendiri valid, krn authorize() ceknya ke classroom yg SALAH.
+        $classroom = $this->resolveClassroom($request, $assignment);
         $this->authorize('submit', $classroom);
 
         abort_unless($assignment->status === 'published', 403, 'Tugas belum dibuka.');
@@ -77,7 +87,10 @@ class ClassroomSubmissionController extends Controller implements \Illuminate\Ro
     /** Guru memberi nilai + feedback. */
     public function grade(GradeClassroomSubmissionRequest $request, ClassroomSubmission $submission)
     {
-        $this->authorize('manage', $submission->assignment->classroom);
+        // Pakai kelas TEMPAT SUBMISSION INI DIKUMPULKAN ($submission->classroom, terisi sejak
+        // store()), bukan kelas asal tugas ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â guru yg mengampu kelas lain yg ditaut jangan sampai
+        // 403 gara2 ceknya ke kelas asal (pola sama dgn download(), lihat catatan di bawah).
+        $this->authorize('manage', $submission->classroom ?? $submission->assignment->classroom);
 
         $max = $submission->assignment->max_score;
         $submission->update([
@@ -96,7 +109,7 @@ class ClassroomSubmissionController extends Controller implements \Illuminate\Ro
     /** Guru membatalkan pengumpulan tugas siswa agar bisa direvisi. */
     public function returnSubmission(ClassroomSubmission $submission)
     {
-        $this->authorize('manage', $submission->assignment->classroom);
+        $this->authorize('manage', $submission->classroom ?? $submission->assignment->classroom);
 
         // Hanya bisa batalkan jika status submitted atau graded
         abort_unless(in_array($submission->status, ['submitted', 'graded']), 403, 'Tugas tidak dalam status dikumpulkan atau dinilai.');
@@ -111,18 +124,48 @@ class ClassroomSubmissionController extends Controller implements \Illuminate\Ro
         return back()->with('success', 'Jawaban berhasil dibatalkan. Siswa sekarang dapat merevisi jawabannya.');
     }
 
+    public function deleteFile(Request $request, ClassroomSubmissionFile $file)
+    {
+        $submission = $file->submission;
+        abort_unless($submission->student_id === $request->user()->uuid, 403, 'Akses ditolak.');
+        abort_unless(in_array($submission->status, ['draft', 'returned']), 403, 'Tidak dapat menghapus file pada tugas yang sudah dikumpulkan.');
+
+        if (\Illuminate\Support\Facades\Storage::disk('public')->exists($file->path)) {
+            \Illuminate\Support\Facades\Storage::disk('public')->delete($file->path);
+        }
+        $file->delete();
+
+        return back()->with('success', 'Lampiran berhasil dihapus.');
+    }
+
     public function download(ClassroomSubmissionFile $file)
     {
         $submission = $file->submission;
-        // Boleh: pengelola kelas TEMPAT SUBMISSION INI DIKUMPULKAN (bukan kelas asal tugas —
-        // satu tugas bisa ditaut ke banyak kelas, guru yg mengajar kelas lain yg ditaut jangan
-        // sampai 403 gara2 ceknya ke kelas asal) ATAU pemilik submission.
         abort_unless(
-            auth()->user()->can('manage', $submission->classroom ?? $submission->assignment->classroom) || $submission->student_id === auth()->id(),
+            auth()->user()->can('monitor', $submission->classroom ?? $submission->assignment->classroom) || $submission->student_id === auth()->id(),
             403
         );
 
         abort_unless(Storage::disk('public')->exists($file->path), 404);
         return Storage::disk('public')->download($file->path, $file->original_name);
     }
+
+    public function preview(ClassroomSubmissionFile $file)
+    {
+        $submission = $file->submission;
+        abort_unless(
+            auth()->user()->can('monitor', $submission->classroom ?? $submission->assignment->classroom) || $submission->student_id === auth()->id(),
+            403
+        );
+
+        abort_unless(Storage::disk('public')->exists($file->path), 404);
+        return response()->file(Storage::disk('public')->path($file->path), [
+            'Content-Type' => $file->mime,
+            'Content-Disposition' => 'inline; filename="' . $file->original_name . '"',
+        ]);
+    }
 }
+
+
+
+

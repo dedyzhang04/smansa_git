@@ -101,6 +101,14 @@
             <textarea name="instruksi" rows="3" class="form-input">{{ old('instruksi', $ujian->instruksi) }}</textarea>
         </div>
 
+        <div>
+            <label class="form-label">Mode Perhitungan Nilai <span class="text-rose-500">*</span></label>
+            <select name="mode_skor" required class="form-select">
+                <option value="rata_rata" @selected(old('mode_skor', $ujian->mode_skor) === 'rata_rata')>Rata-rata (Maksimal skor selalu 100)</option>
+                <option value="akumulasi" @selected(old('mode_skor', $ujian->mode_skor) === 'akumulasi')>Akumulasi Poin (Penjumlahan seluruh poin bobot soal)</option>
+            </select>
+        </div>
+
         <div class="grid sm:grid-cols-3 gap-3 pt-1">
             <label class="flex items-center gap-2 text-sm cursor-pointer">
                 <input type="checkbox" name="acak_soal" value="1" @checked(old('acak_soal', $ujian->acak_soal)) class="rounded text-primary focus:ring-primary"> Acak urutan soal
@@ -120,15 +128,74 @@
     </form>
     @endif
 
-    @unless($ujian->isPublished())
-    <div class="card p-6 border-l-4 !border-l-rose-500 space-y-2">
+    <div class="card p-6 border-l-4 !border-l-blue-500 space-y-2" x-data="{ open: false }">
+        <h2 class="font-bold text-blue-700 dark:text-blue-400">Backup Ujian</h2>
+        <p class="text-sm text-slate-500 dark:text-slate-400">Unduh seluruh data ujian ini (termasuk soal, kelas, jawaban siswa, dan nilai) dalam bentuk file <code>.json</code>. File ini nantinya bisa di-upload kembali untuk me-restore ujian.</p>
+        <button type="button" @click="open = true" class="px-4 py-2 rounded-xl text-sm font-bold bg-blue-600 text-white hover:bg-blue-700">Backup Sekarang</button>
+        
+        <div x-show="open" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm" style="display: none;">
+            <form method="POST" action="{{ route('ujian.backup', $ujian) }}" class="bg-white dark:bg-slate-800 rounded-2xl p-6 max-w-md w-full space-y-4 shadow-xl" @click.outside="open = false" onsubmit="setTimeout(() => document.getElementById('global-loading-spinner')?.classList.add('hidden'), 500)">
+                @csrf
+                <h3 class="text-lg font-bold text-slate-800 dark:text-slate-100">Konfirmasi Password</h3>
+                <p class="text-sm text-slate-500 dark:text-slate-400">Silakan masukkan password admin Anda untuk mendownload backup data ujian ini.</p>
+                <div>
+                    <input type="password" name="password" required class="form-input w-full" placeholder="Password Admin">
+                </div>
+                <div class="flex justify-end gap-2 pt-2">
+                    <button type="button" @click="open = false" class="btn-secondary px-4 py-2 rounded-xl text-sm">Batal</button>
+                    <button type="submit" class="btn-primary px-4 py-2 rounded-xl text-sm font-bold" @click="setTimeout(() => open = false, 500)">Download Backup</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+        <div class="card p-6 border-l-4 !border-l-amber-500 space-y-2" x-data="{ openReset: false }">
+        <h2 class="font-bold text-amber-700 dark:text-amber-400">Kosongkan Data Pengerjaan</h2>
+        <p class="text-sm text-slate-500 dark:text-slate-400">Menghapus seluruh rekaman jawaban dan sesi pengerjaan ujian siswa. <strong>Nilai yang sudah ditransfer ke buku nilai akan tetap aman dan tidak ikut terhapus.</strong> Ujian akan kembali kosong seperti belum dikerjakan.</p>
+        <button type="button" @click="openReset = true" class="px-4 py-2 rounded-xl text-sm font-bold bg-amber-600 text-white hover:bg-amber-700">Reset Semua Pengerjaan</button>
+        
+        <div x-show="openReset" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm" style="display: none;">
+            <form method="POST" action="{{ route('ujian.resetTotal', $ujian) }}" class="bg-white dark:bg-slate-800 rounded-2xl p-6 max-w-md w-full space-y-4 shadow-xl" @click.outside="openReset = false">
+                @csrf
+                <h3 class="text-lg font-bold text-amber-600">Konfirmasi Reset Data Pengerjaan</h3>
+                <p class="text-sm text-slate-500 dark:text-slate-400">Masukkan password admin Anda untuk mengonfirmasi penghapusan seluruh data jawaban siswa di ujian ini.</p>
+                <div>
+                    <input type="password" name="password" required class="form-input w-full" placeholder="Password Admin">
+                </div>
+                <div class="flex justify-end gap-2 pt-2">
+                    <button type="button" @click="openReset = false" class="btn-secondary px-4 py-2 rounded-xl text-sm">Batal</button>
+                    <button type="submit" class="px-4 py-2 rounded-xl text-sm font-bold bg-amber-600 text-white hover:bg-amber-700" @click="setTimeout(() => openReset = false, 500)">Ya, Kosongkan Data</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    <div class="card p-6 border-l-4 !border-l-rose-500 space-y-2" x-data="{ open: false }">
         <h2 class="font-bold text-rose-700 dark:text-rose-400">Hapus Ujian</h2>
         <p class="text-sm text-slate-500 dark:text-slate-400">Menghapus ujian ini beserta seluruh soal, kelas, dan token yang sudah ditetapkan. Tindakan ini tidak bisa dibatalkan.</p>
-        <form method="POST" action="{{ route('ujian.destroy', $ujian) }}" onsubmit="return confirmAction(this, 'Hapus ujian &quot;{{ $ujian->judul }}&quot; beserta seluruh soalnya? Tindakan ini tidak bisa dibatalkan.', 'red')">
-            @csrf @method('DELETE')
-            <button type="submit" class="px-4 py-2 rounded-xl text-sm font-bold bg-rose-600 text-white hover:bg-rose-700">Hapus Ujian</button>
-        </form>
+        <button type="button" @click="open = true" class="px-4 py-2 rounded-xl text-sm font-bold bg-rose-600 text-white hover:bg-rose-700">Hapus Ujian</button>
+        
+        <div x-show="open" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm" style="display: none;">
+            <form method="POST" action="{{ route('ujian.destroy', $ujian) }}" class="bg-white dark:bg-slate-800 rounded-2xl p-6 max-w-md w-full space-y-4 shadow-xl" @click.outside="open = false">
+                @csrf @method('DELETE')
+                <h3 class="text-lg font-bold text-rose-600">Konfirmasi Hapus</h3>
+                <p class="text-sm text-slate-500 dark:text-slate-400">Masukkan password admin Anda untuk mengonfirmasi penghapusan ujian ini secara permanen.</p>
+                <div>
+                    <input type="password" name="password" required class="form-input w-full" placeholder="Password Admin">
+                </div>
+                <div class="flex justify-end gap-2 pt-2">
+                    <button type="button" @click="open = false" class="btn-secondary px-4 py-2 rounded-xl text-sm">Batal</button>
+                    <button type="submit" class="px-4 py-2 rounded-xl text-sm font-bold bg-rose-600 text-white hover:bg-rose-700">Hapus Permanen</button>
+                </div>
+            </form>
+        </div>
     </div>
-    @endunless
-</div>
+    </div>
 @endsection
+
+
+
+
+
+
+
+

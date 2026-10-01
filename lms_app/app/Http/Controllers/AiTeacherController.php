@@ -82,18 +82,21 @@ class AiTeacherController extends Controller
         $user = auth()->user();
 
         $arenaClassrooms = collect();
+        $arenaClassroomsDiag = null;
         if (ModulAktif::aktif('arena_belajar')) {
-            $arenaClassrooms = Classroom::query()
-                ->where('status', 'published')
-                ->latest()
-                ->limit(80)
+            $manageableClassrooms = Classroom::with(['rombel', 'pelajaran'])
+                ->orderBy('title')
                 ->get()
                 ->filter(fn (Classroom $c) => $user->can('manage', $c))
-                ->values()
+                ->values();
+
+            $arenaClassrooms = $manageableClassrooms
                 ->map(fn (Classroom $c) => [
                     'uuid' => $c->uuid,
                     'title' => $c->title,
                 ]);
+
+
         }
 
         $hasApiKey = $user->hasGeminiApiKey();
@@ -104,6 +107,7 @@ class AiTeacherController extends Controller
             'quotaUsage' => $this->aiPublicQuotaUsage(true, $user->uuid),
             'canViewQuotaUsage' => false,
             'arenaClassrooms' => $arenaClassrooms,
+            'arenaClassroomsDiag' => $arenaClassroomsDiag,
             'arenaBelajarAktif' => ModulAktif::aktif('arena_belajar'),
             'launcherAktif' => (Setting::get('tp_launcher_aktif', '1') ?? '1') === '1',
             'needsApiKeySetup' => ! $hasApiKey,

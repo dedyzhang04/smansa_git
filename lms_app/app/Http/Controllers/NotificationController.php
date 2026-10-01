@@ -2,8 +2,14 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\ChatbotConversation;
+use App\Models\ChatbotMessage;
 use App\Models\User;
 use App\Models\UserFcmToken;
+use App\Models\UserFeedback;
+use App\Services\Chatbot\ChatbotService;
+use App\Support\GrupChatMenu;
+use App\Support\ModulAktif;
 use App\Support\NotificationGate;
 use Illuminate\Http\Request;
 use Illuminate\Notifications\DatabaseNotification;
@@ -11,7 +17,16 @@ use Illuminate\Support\Collection;
 
 class NotificationController extends Controller
 {
-    /** Get notifications JSON */
+    public function __construct(private ChatbotService $chatbot) {}
+
+    /**
+     * Get notifications JSON — sekaligus "status bar" gabungan: dulu bel notifikasi, badge
+     * grup chat, badge chatbot, badge chat-admin, dan badge masukan masing2 nembak request
+     * sendiri2 (bersamaan persis tiap halaman dimuat & tiap interval) — sekarang badge
+     * lain2 itu numpang di SATU response yang sama, cuma disertakan kalau relevan utk role
+     * user (lihat badgesLainnya()). Bel tetap satu2nya yg menjadwalkan polling-nya sendiri
+     * (layouts/app.blade.php) — komponen lain jadi murni pendengar event 'notif-updated'.
+     */
     public function getNotifications(Request $request)
     {
         $user = $request->user();
@@ -19,8 +34,9 @@ class NotificationController extends Controller
             return response()->json(['ok' => false], 401);
         }
 
-        // Tandai/bersihkan sampah unread yang gagal gate agar tidak memenuhi window.
-        $this->purgeInaccessibleUnread($user);
+        // PERFORMA: Dimatikan karena memicu chunk DB queries setiap 45 detik saat user aktif (polling).
+        // Cukup biarkan exclude query base filter yang mencegah notif sampah ini muncul ke user.
+        // $this->purgeInaccessibleUnread($user);
 
         $feed = $this->visibleNotifications($user, unreadOnly: false, limit: 20);
         $unreadStats = $this->unreadStats($user);
@@ -39,31 +55,69 @@ class NotificationController extends Controller
             'notifications' => $formatted,
             'unreadCount' => $unreadStats['unread'],
             'unreadPengumuman' => $unreadStats['pengumuman'],
+            ...$this->badgesLainnya($user),
         ]);
     }
 
+    /**
+     * Badge widget lain di luar notifikasi, digabung ke response yang sama alih2 tiap
+     * widget nembak fetch sendiri. Field per-role hanya disertakan kalau memang relevan —
+     * sama dgn syarat @if yg sebelumnya membungkus tiap widget di layouts/app.blade.php.
+     */
+    private function badgesLainnya(User $user): array
+    {
+        $badges = [];
+
+        if (ModulAktif::aktif('grup_chat') && GrupChatMenu::tampil($user)) {
+            $badges['grupUnread'] = GrupChatMenu::unreadTotal($user);
+        }
+
+        if (ModulAktif::aktif('chatbot') && in_array($user->access, ['siswa', 'orangtua'], true)) {
+            $badges['chatbotUnread'] = $this->chatbot->unreadForUser($user);
+        }
+
+        if (in_array($user->access, ['superadmin', 'admin'], true)) {
+            $badges['adminChatUnread'] = max(
+                ChatbotConversation::where('status', 'waiting')->count(),
+                ChatbotMessage::where('sender', 'user')
+                    ->whereNull('read_at')
+                    ->whereHas('conversation', fn ($q) => $q->whereIn('status', ['waiting', 'assigned']))
+                    ->count()
+            );
+        }
+
+        if ($user->canAccess('manage_feedback')) {
+            $badges['feedbackUnread'] = UserFeedback::where('status', 'baru')->count();
+        }
+
+        return $badges;
+    }
+
     /** Mark single notification as read */
-    public function markAsRead(Request $request, $id)
+    public function markAsRead(Request $request, $id, \App\Services\FirebaseRtdbService $firebase)
     {
         $user = $request->user();
         $notification = $user->notifications()->find($id);
         if ($notification && NotificationGate::userCanView($user, (array) ($notification->data ?? []))) {
             $notification->markAsRead();
+            $firebase->pingUser($user->uuid);
         }
 
         return response()->json(['ok' => true]);
     }
 
     /** Mark all notifications as read */
-    public function markAllAsRead(Request $request)
+    public function markAllAsRead(Request $request, \App\Services\FirebaseRtdbService $firebase)
     {
         $user = $request->user();
 
         // Sampah yang gagal gate ikut ditandai dibaca supaya tidak mengunci badge/feed.
         $this->purgeInaccessibleUnread($user);
 
-        // Setelah purge, sisa unread adalah yang boleh dilihat — tandai semua.
+        // Setelah purge, sisa unread adalah yang boleh dilihat ?" tandai semua.
         $user->unreadNotifications()->update(['read_at' => now()]);
+
+        $firebase->pingUser($user->uuid);
 
         return response()->json(['ok' => true]);
     }
@@ -116,20 +170,21 @@ class NotificationController extends Controller
         $unread = 0;
         $pengumuman = 0;
 
-        $this->baseQuery($user, unreadOnly: true)
+        $notifications = $this->baseQuery($user, unreadOnly: true)
             ->orderBy('created_at', 'desc')
-            ->chunkById(200, function (Collection $chunk) use ($user, &$unread, &$pengumuman) {
-                $preload = NotificationGate::preload($user, $chunk);
-                foreach ($chunk as $n) {
-                    if (! NotificationGate::userCanView($user, (array) ($n->data ?? []), $preload)) {
-                        continue;
-                    }
-                    $unread++;
-                    if (($n->data['type'] ?? null) === 'pengumuman') {
-                        $pengumuman++;
-                    }
-                }
-            });
+            ->take(100)
+            ->get();
+
+        $preload = NotificationGate::preload($user, $notifications);
+        foreach ($notifications as $n) {
+            if (! NotificationGate::userCanView($user, (array) ($n->data ?? []), $preload)) {
+                continue;
+            }
+            $unread++;
+            if (($n->data['type'] ?? null) === 'pengumuman') {
+                $pengumuman++;
+            }
+        }
 
         return ['unread' => $unread, 'pengumuman' => $pengumuman];
     }
