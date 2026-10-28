@@ -1082,6 +1082,7 @@ Route::middleware(['auth', EnsureFaceRegistered::class])->group(function () {
             Route::post('/face-reset-all', 'resetAllFaceVerification')->name('setting.faceResetAll');
             Route::post('/kiosk-token/regenerate', 'regenerateKioskToken')->name('setting.kioskToken.regenerate');
             Route::post('/agenda-wajib-pulang', 'setAgendaWajibPulang')->name('setting.agendaWajibPulang');
+            Route::post('/mode-ujian/toggle', 'toggleModeUjian')->name('setting.mode-ujian.toggle');
             Route::post('/polling-nonaktif', 'setPollingNonaktif')->name('setting.pollingNonaktif');
             Route::post('/jenis-aturan', 'setJenisAturan')->name('setting.jenisAturan');
             Route::post('/poin-terlambat-aturan', 'setPoinTerlambatAturan')->name('setting.poinTerlambatAturan');
@@ -1143,6 +1144,7 @@ Route::middleware(['auth', EnsureFaceRegistered::class])->group(function () {
     Route::middleware('modul:ujian')->prefix('ujian')->name('ujian.')->group(function () {
         // Authoring (guru/admin/kurikulum)
         Route::get('/', [UjianController::class, 'index'])->name('index');
+        Route::post('/mode-ujian/toggle', [\App\Http\Controllers\SettingController::class, 'toggleModeUjian'])->name('mode-ujian.toggle');
         Route::get('/buat', [UjianController::class, 'create'])->name('create');
         Route::post('/', [UjianController::class, 'store'])->middleware('throttle:30,1')->name('store');
 
@@ -1155,6 +1157,7 @@ Route::middleware(['auth', EnsureFaceRegistered::class])->group(function () {
         Route::post('/{ujian}/mulai', [UjianSiswaController::class, 'start'])->middleware('throttle:10,1')->name('siswa.start');
         Route::get('/{ujian}/kerjakan/{attempt}', [UjianSiswaController::class, 'kerjakan'])->name('siswa.kerjakan');
         Route::post('/{ujian}/kerjakan/{attempt}/jawab', [UjianSiswaController::class, 'simpanJawaban'])->middleware('throttle:60,1')->name('siswa.jawab');
+        Route::post('/{ujian}/kerjakan/{attempt}/sinkron-batch', [UjianSiswaController::class, 'sinkronBatch'])->middleware('throttle:120,1')->name('siswa.sinkronBatch');
         Route::get('/{ujian}/kerjakan/{attempt}/status', [UjianSiswaController::class, 'status'])->middleware('throttle:360,1')->name('siswa.status');
         Route::post('/{ujian}/kerjakan/{attempt}/keluar-fullscreen', [UjianSiswaController::class, 'laporKeluar'])->middleware('throttle:30,1')->name('siswa.keluar');
         Route::post('/{ujian}/kerjakan/{attempt}/kumpul', [UjianSiswaController::class, 'submit'])->middleware('throttle:10,1')->name('siswa.submit');

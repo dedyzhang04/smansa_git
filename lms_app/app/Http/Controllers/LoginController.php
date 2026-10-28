@@ -148,7 +148,7 @@ class LoginController extends Controller
         // Refresh session auth to update the password hash in the session
         Auth::login($user);
 
-        return redirect()->route('dashboard')->with('success', 'Password berhasil diperbarui.');
+        return redirect($this->getRedirectUrl($user))->with('success', 'Password berhasil diperbarui.');
     }
 
     public function changeUsername(Request $request)
@@ -288,6 +288,19 @@ class LoginController extends Controller
     private function loginResilient(User $user, bool $remember = false): void
     {
         retry(3, fn () => Auth::login($user, $remember), fn (int $attempt) => $attempt * 200);
+
+        // Rencana 4: Pre-populate data profil siswa di session saat login
+        // Menghilangkan puluhan ribu query redundant (SELECT * FROM siswas WHERE id_login = ...) saat ujian
+        if ($user->access === 'siswa') {
+            try {
+                $siswa = Siswa::where('id_login', $user->uuid)->first();
+                if ($siswa) {
+                    session()->put('profil_siswa_' . $user->uuid, $siswa);
+                }
+            } catch (\Throwable $e) {
+                // Abaikan jika ada gangguan DB sesaat; siswaAtauGagal memiliki fallback mandiri
+            }
+        }
     }
 
     private function dbBusyMessage(): string
@@ -297,19 +310,24 @@ class LoginController extends Controller
 
     private function redirectAfterLogin(User $user)
     {
+        // Siswa/user yang belum ganti password atau baru direset WAJIB masuk ke halaman ganti password dulu
         if ($user->must_change_password) {
             return redirect()->route('ganti.password')->with('warning', 'Demi keamanan, silakan ubah password bawaan atau password yang baru saja direset.');
         }
+
         return redirect($this->getRedirectUrl($user));
     }
 
     /**
-     * Tujuan setelah login. Saat ini semua role diarahkan ke dashboard;
-     * method ini dipertahankan sebagai satu titik ubah bila nanti perlu
-     * landing page berbeda per role.
+     * Tujuan setelah login. Jika Mode Ujian aktif, siswa langsung diarahkan
+     * ke halaman ujian (/ujian/saya) agar melewati dashboard dan menghemat ribuan query DB.
      */
     private function getRedirectUrl(User $user): string
     {
+        if ($user->access === 'siswa' && \App\Support\ModeUjian::aktif()) {
+            return route('ujian.siswa.index');
+        }
+
         return route('dashboard');
     }
 }
