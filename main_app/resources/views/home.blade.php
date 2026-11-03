@@ -125,7 +125,7 @@
                     </div>
                     <div class="welcome-signature">
                         <p class="welcome-sig-text">Drs. Kariadi</p>
-                        <p style="font-size: 0.85rem; color: var(--text-muted);">NIP. 19680512 199803 1 004</p>
+                        <p style="font-size: 0.85rem; color: var(--text-muted);">NIP. 19680810 199803 1 006</p>
                     </div>
                 </div>
             </div>
