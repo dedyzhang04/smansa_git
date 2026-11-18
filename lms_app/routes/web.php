@@ -1304,6 +1304,7 @@ Route::middleware(['auth', EnsureFaceRegistered::class])->group(function () {
         Route::get('/soal/template', [UjianSoalController::class, 'template'])->name('soal.template');
         Route::post('/unggah-gambar', [UjianSoalController::class, 'uploadGambar'])->middleware('throttle:30,1')->name('soal.unggah-gambar');
         Route::get('/{ujian}/soal/export', [UjianSoalController::class, 'export'])->name('soal.export');
+        Route::get('/{ujian}/soal/cetak', [UjianSoalController::class, 'cetak'])->name('soal.cetak');
         Route::post('/{ujian}/soal/import', [UjianSoalController::class, 'import'])->name('soal.import');
         Route::get('/{ujian}/soal/sumber', [UjianSoalController::class, 'daftarSumberUjian'])->name('soal.sumber');
         Route::post('/{ujian}/soal/salin', [UjianSoalController::class, 'salinDariUjian'])->name('soal.salin');
@@ -1513,11 +1514,13 @@ if (config('demo.enabled', false)) {
 Route::middleware(['auth', EnsureFaceRegistered::class, NonaktifSaatModeUjian::class.':Survei Pembelajaran'])->prefix('survei-pembelajaran')->name('survei.')->controller(\App\Http\Controllers\SurveiPembelajaranController::class)->group(function () {
     Route::get('/', 'index')->name('index');
     Route::post('/', 'store')->middleware('throttle:10,1')->name('store');
+    Route::post('/template-soal', 'simpanTemplate')->name('template.simpan');
+    Route::post('/template-soal/reset', 'resetTemplate')->name('template.reset');
     Route::get('/periode/{periode}', 'periode')->name('periode');
+    Route::put('/periode/{periode}/pertanyaan', 'updatePertanyaan')->name('pertanyaan.update');
+    Route::delete('/periode/{periode}', 'destroy')->name('destroy');
     Route::post('/periode/{periode}/tutup', 'tutup')->name('tutup');
     Route::post('/periode/{periode}/sesi', 'mulaiSesi')->middleware('throttle:15,1,survei-sesi')->name('sesi.mulai');
-    Route::post('/periode/{periode}/wajib-seb', 'wajibkanSeb')->name('seb.wajib');
-    Route::post('/periode/{periode}/wajib-kios', 'wajibkanKios')->name('kios.wajib');
     Route::post('/periode/{periode}/sesi/{sesiId}/token', 'gantiToken')->whereUuid('sesiId')->middleware('throttle:15,1,survei-sesi')->name('sesi.token');
     Route::post('/periode/{periode}/sesi/{sesiId}/akhiri', 'akhiriSesi')->whereUuid('sesiId')->name('sesi.akhiri');
     Route::get('/periode/{periode}/export', 'export')->name('export');
@@ -1528,10 +1531,6 @@ Route::middleware(['auth', EnsureFaceRegistered::class, NonaktifSaatModeUjian::c
     Route::get('/masuk/{periode}', 'masuk')->name('masuk');
     Route::get('/periode/{periode}/isi', 'form')->name('form');
     Route::post('/periode/{periode}/token', 'bukaDenganToken')->middleware('throttle:8,1,survei-token')->name('token');
-    Route::post('/periode/{periode}/verifikasi-seb', 'verifikasiSeb')->middleware('throttle:10,1,survei-seb')->name('seb.verifikasi');
-    Route::post('/periode/{periode}/verifikasi-kios', 'verifikasiKios')->middleware('throttle:10,1,survei-kios')->name('kios.verifikasi');
-    Route::get('/periode/{periode}/selesai-kios', 'selesaiKios')->name('kios.selesai');
-    Route::get('/selesai/{kode}', 'keluarSeb')->whereUuid('kode')->name('seb.keluar');
     Route::post('/periode/{periode}/isi', 'kirimBatch')->middleware('throttle:30,1')->name('kirim-batch');
     Route::get('/isi/{target}', 'isi')->name('isi');
     Route::post('/isi/{target}', 'kirim')->middleware('throttle:30,1')->name('kirim');

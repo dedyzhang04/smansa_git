@@ -70,7 +70,7 @@
                     @endphp
                     <div class="text-xs flex items-center gap-2 {{ $opsi->is_benar ? 'text-emerald-600 font-semibold' : ($dipilih ? 'text-rose-500' : 'text-slate-400') }}">
                         <i data-lucide="{{ $dipilih ? 'check-square' : 'square' }}" class="w-3.5 h-3.5 flex-shrink-0"></i>
-                        <span>{{ strip_tags($opsi->teks_opsi) }}</span>
+                        <span>{{ \App\Support\RichText::toPlainText($opsi->teks_opsi) }}</span>
                         @if($opsi->is_benar) <span class="text-[10px] uppercase tracking-wide">(kunci)</span> @endif
                     </div>
                     @endforeach
@@ -78,11 +78,15 @@
             @elseif($soal->tipe === 'match')
                 <div class="space-y-1 pl-4">
                     @foreach($soal->meta['pairs'] ?? [] as $p)
-                    @php $jawabPasangan = ($jawaban?->jawaban_pasangan ?? [])[$p['left']] ?? null; @endphp
-                    <div class="text-xs flex items-center gap-2 {{ $jawabPasangan === $p['right'] ? 'text-emerald-600' : 'text-rose-500' }}">
-                        <span>{{ strip_tags($p['left']) }} → {{ $jawabPasangan ? strip_tags($jawabPasangan) : '(tak dijawab)' }}</span>
-                        @if($jawabPasangan !== $p['right'])
-                        <span class="text-slate-400">(kunci: {{ strip_tags($p['right']) }})</span>
+                    @php
+                        $pLeft = $p['left'] ?? $p['kiri'] ?? '';
+                        $pRight = $p['right'] ?? $p['kanan'] ?? '';
+                        $jawabPasangan = ($jawaban?->jawaban_pasangan ?? [])[$pLeft] ?? null;
+                    @endphp
+                    <div class="text-xs flex items-center gap-2 {{ $jawabPasangan === $pRight ? 'text-emerald-600' : 'text-rose-500' }}">
+                        <span>{{ \App\Support\RichText::toPlainText($pLeft) }} → {{ $jawabPasangan ? \App\Support\RichText::toPlainText($jawabPasangan) : '(tak dijawab)' }}</span>
+                        @if($jawabPasangan !== $pRight)
+                        <span class="text-slate-400">(kunci: {{ \App\Support\RichText::toPlainText($pRight) }})</span>
                         @endif
                     </div>
                     @endforeach
