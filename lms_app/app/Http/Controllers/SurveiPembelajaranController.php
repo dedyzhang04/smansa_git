@@ -29,7 +29,7 @@ use Illuminate\Validation\ValidationException;
 
 class SurveiPembelajaranController extends Controller
 {
-    public function __construct(private ?SafeExamBrowser $seb = null, private ?Kios $kios = null) {}
+    public function __construct(private SafeExamBrowser $seb, private Kios $kios) {}
 
     private function admin(): void
     {
@@ -86,6 +86,7 @@ class SurveiPembelajaranController extends Controller
                 'pertanyaanWaliDefault' => Pertanyaan::untuk('wali'),
                 'dibalikMapelDefault' => Pertanyaan::dibalik('mapel'),
                 'dibalikWaliDefault' => Pertanyaan::dibalik('wali'),
+                'opsiKarakterDefault' => Pertanyaan::karakter(),
             ]);
         }
 
@@ -144,10 +145,10 @@ class SurveiPembelajaranController extends Controller
         $lihatSemua = $user->canViewSurveiResults();
         abort_unless($lihatSemua || $user->canViewOwnSurveiResults(), 403);
 
-        $periodes = Periode::where(fn ($query) => $query->where('ditutup', true)->orWhere('selesai', '<', now()))
+        $periodes = Periode::query()
             ->when(! $lihatSemua, fn ($query) => $query->whereHas('targets',
                 fn ($targets) => $targets->where('guru_id', $user->guru->uuid)))
-            ->latest('selesai')
+            ->latest('mulai')
             ->get();
 
         return response()->view('survei.rekap', compact('periodes', 'lihatSemua'))->header('Cache-Control', 'private, no-store');
@@ -171,6 +172,8 @@ class SurveiPembelajaranController extends Controller
             'pertanyaan_wali.*' => ['required', 'string', 'max:500'],
             'dibalik_wali' => ['sometimes', 'array'],
             'dibalik_wali.*' => ['integer'],
+            'opsi_karakter' => ['sometimes', 'array', 'min:1'],
+            'opsi_karakter.*' => ['required', 'string', 'max:255'],
             'simpan_default' => ['sometimes', 'boolean'],
         ]);
 
@@ -186,13 +189,17 @@ class SurveiPembelajaranController extends Controller
         $dibalikWali = isset($values['dibalik_wali'])
             ? array_map('intval', array_values($values['dibalik_wali']))
             : Pertanyaan::dibalik('wali');
+        $opsiKarakter = ! empty($values['opsi_karakter'])
+            ? array_values(array_filter($values['opsi_karakter'], fn ($t) => is_string($t) && trim($t) !== ''))
+            : Pertanyaan::karakter();
 
         if (! empty($values['simpan_default'])) {
             Pertanyaan::simpanDefault('mapel', $butirMapel, $dibalikMapel);
             Pertanyaan::simpanDefault('wali', $butirWali, $dibalikWali);
+            Pertanyaan::simpanDefaultKarakter($opsiKarakter);
         }
 
-        $periode = DB::transaction(function () use ($values, $butirMapel, $butirWali, $dibalikMapel, $dibalikWali) {
+        $periode = DB::transaction(function () use ($values, $butirMapel, $butirWali, $dibalikMapel, $dibalikWali, $opsiKarakter) {
             $jadwal = Jadwal::query()
                 ->whereIn('id_kelas', $values['kelas'])
                 ->whereNotNull('id_guru')
@@ -229,6 +236,7 @@ class SurveiPembelajaranController extends Controller
                     'kendala_wali' => Pertanyaan::kendala('wali'),
                     'dibalik_mapel' => $dibalikMapel,
                     'dibalik_wali' => $dibalikWali,
+                    'opsi_karakter' => $opsiKarakter,
                 ],
             ]);
 
@@ -345,6 +353,8 @@ class SurveiPembelajaranController extends Controller
             'pertanyaan_wali.*' => ['required', 'string', 'max:500'],
             'dibalik_wali' => ['sometimes', 'array'],
             'dibalik_wali.*' => ['integer'],
+            'opsi_karakter' => ['sometimes', 'array', 'min:1'],
+            'opsi_karakter.*' => ['required', 'string', 'max:255'],
             'simpan_default' => ['sometimes', 'boolean'],
         ]);
 
@@ -352,20 +362,25 @@ class SurveiPembelajaranController extends Controller
         $butirWali = array_values(array_filter($values['pertanyaan_wali'], fn ($t) => is_string($t) && trim($t) !== ''));
         $dibalikMapel = isset($values['dibalik_mapel']) ? array_map('intval', array_values($values['dibalik_mapel'])) : [];
         $dibalikWali = isset($values['dibalik_wali']) ? array_map('intval', array_values($values['dibalik_wali'])) : [];
+        $opsiKarakter = ! empty($values['opsi_karakter'])
+            ? array_values(array_filter($values['opsi_karakter'], fn ($t) => is_string($t) && trim($t) !== ''))
+            : $periode->pilihanKarakter();
 
-        DB::transaction(function () use ($periode, $butirMapel, $butirWali, $dibalikMapel, $dibalikWali, $values): void {
+        DB::transaction(function () use ($periode, $butirMapel, $butirWali, $dibalikMapel, $dibalikWali, $opsiKarakter, $values): void {
             $locked = Periode::whereKey($periode->uuid)->lockForUpdate()->firstOrFail();
             $pertanyaan = (array) ($locked->pertanyaan ?? []);
             $pertanyaan['mapel'] = $butirMapel;
             $pertanyaan['wali'] = $butirWali;
             $pertanyaan['dibalik_mapel'] = $dibalikMapel;
             $pertanyaan['dibalik_wali'] = $dibalikWali;
+            $pertanyaan['opsi_karakter'] = $opsiKarakter;
             $locked->update(['pertanyaan' => $pertanyaan]);
             Audit::log('survei_pertanyaan_diubah', $locked);
 
             if (! empty($values['simpan_default'])) {
                 Pertanyaan::simpanDefault('mapel', $butirMapel, $dibalikMapel);
                 Pertanyaan::simpanDefault('wali', $butirWali, $dibalikWali);
+                Pertanyaan::simpanDefaultKarakter($opsiKarakter);
             }
         });
 
@@ -384,6 +399,8 @@ class SurveiPembelajaranController extends Controller
             'pertanyaan_wali.*' => ['required', 'string', 'max:500'],
             'dibalik_wali' => ['sometimes', 'array'],
             'dibalik_wali.*' => ['integer'],
+            'opsi_karakter' => ['sometimes', 'array', 'min:1'],
+            'opsi_karakter.*' => ['required', 'string', 'max:255'],
         ]);
 
         $butirMapel = array_values(array_filter($values['pertanyaan_mapel'], fn ($t) => is_string($t) && trim($t) !== ''));
@@ -393,6 +410,10 @@ class SurveiPembelajaranController extends Controller
 
         Pertanyaan::simpanDefault('mapel', $butirMapel, $dibalikMapel);
         Pertanyaan::simpanDefault('wali', $butirWali, $dibalikWali);
+        if (! empty($values['opsi_karakter'])) {
+            $opsiKarakter = array_values(array_filter($values['opsi_karakter'], fn ($t) => is_string($t) && trim($t) !== ''));
+            Pertanyaan::simpanDefaultKarakter($opsiKarakter);
+        }
 
         return redirect()->route('survei.index')->with('success', 'Template butir pertanyaan default berhasil disimpan.');
     }
@@ -416,6 +437,12 @@ class SurveiPembelajaranController extends Controller
         DB::transaction(function () use ($periode, $values): void {
             $locked = Periode::whereKey($periode->uuid)->lockForUpdate()->firstOrFail();
             abort_unless($locked->terbuka(), 403, 'Sesi hanya dapat dimulai dalam jadwal periode.');
+            if ($locked->wajib_seb && ! $this->seb->siap()) {
+                throw ValidationException::withMessages(['wajib_seb' => 'Siapkan konfigurasi Safe Exam Browser sebelum memulai sesi.']);
+            }
+            if ($locked->wajib_kios && ! $this->kios->siap()) {
+                throw ValidationException::withMessages(['wajib_kios' => 'Daftarkan perangkat SIMS Kios sebelum memulai sesi.']);
+            }
             if ($locked->sesiAktif()) {
                 throw ValidationException::withMessages(['kelas_sesi' => 'Tekan Siap pada sesi yang sedang berjalan terlebih dahulu.']);
             }
@@ -435,12 +462,35 @@ class SurveiPembelajaranController extends Controller
 
     public function wajibkanSeb(Request $request, Periode $periode)
     {
-        return redirect()->route('survei.periode', $periode);
+        abort_unless($periode->bolehMelihatIdentitas($request->user()), 403);
+
+        DB::transaction(function () use ($periode): void {
+            $locked = Periode::whereKey($periode->uuid)->lockForUpdate()->firstOrFail();
+            abort_if($locked->berakhir() || $locked->sesiAktif(), 403, 'Akhiri sesi aktif sebelum mewajibkan Safe Exam Browser.');
+            abort_if($locked->wajib_kios, 403, 'Periode ini menggunakan SIMS Kios.');
+            if (! $locked->wajib_seb) {
+                $locked->update(['wajib_seb' => true]);
+                Audit::log('survei_seb_diwajibkan', $locked);
+            }
+        });
+
+        return redirect()->route('survei.periode', $periode)->with('success', 'Safe Exam Browser diwajibkan untuk periode ini.');
     }
 
     public function wajibkanKios(Request $request, Periode $periode)
     {
-        return redirect()->route('survei.periode', $periode);
+        abort_unless($periode->bolehMelihatIdentitas($request->user()), 403);
+
+        DB::transaction(function () use ($periode): void {
+            $locked = Periode::whereKey($periode->uuid)->lockForUpdate()->firstOrFail();
+            abort_if($locked->berakhir() || $locked->sesiAktif(), 403, 'Akhiri sesi aktif sebelum mengubah mode perangkat.');
+            if (! $locked->wajib_kios) {
+                $locked->update(['wajib_kios' => true, 'wajib_seb' => false, 'wajib_token' => true]);
+                Audit::log('survei_kios_diwajibkan', $locked);
+            }
+        });
+
+        return redirect()->route('survei.periode', $periode)->with('success', 'SIMS Kios diwajibkan untuk periode ini.');
     }
 
     public function gantiToken(Request $request, Periode $periode, string $sesiId)
@@ -521,7 +571,8 @@ class SurveiPembelajaranController extends Controller
         }
 
         $siswa = $this->siswa();
-        abort_unless($periode->terbuka() && $periode->targets()->where('kelas_id', $siswa->id_kelas)->exists(), 403, 'Survei tidak tersedia untuk kelasmu.');
+        abort_unless(($periode->terbuka() || (($periode->wajib_seb || $periode->wajib_kios) && $periode->berakhir()))
+            && $periode->targets()->where('kelas_id', $siswa->id_kelas)->exists(), 403, 'Survei tidak tersedia untuk kelasmu.');
 
         return redirect()->route('survei.form', $periode);
     }
@@ -537,7 +588,7 @@ class SurveiPembelajaranController extends Controller
         }
 
         $siswa = $this->siswa();
-        abort_unless($periode->terbuka(), 403, 'Survei belum dibuka atau sudah berakhir.');
+        abort_if(! $periode->wajib_seb && ! $periode->wajib_kios && ! $periode->terbuka(), 403, 'Survei belum dibuka atau sudah berakhir.');
         $status = $this->targetDenganStatus($periode, $siswa);
         $targets = $status->where('kelas_id', $siswa->id_kelas);
         abort_unless($targets->isNotEmpty(), 403, 'Survei tidak tersedia untuk kelasmu.');
@@ -545,6 +596,8 @@ class SurveiPembelajaranController extends Controller
         if ($this->periodeSudahDiisi($status)) {
             return $this->jawabanTerkirim($request, $periode);
         }
+
+        abort_unless($periode->terbuka(), 403, 'Survei belum dibuka atau sudah berakhir.');
 
         $tandaSesi = null;
         if ($periode->wajib_token) {
@@ -559,6 +612,31 @@ class SurveiPembelajaranController extends Controller
             }
         }
 
+        $tantanganKios = null;
+        if ($periode->wajib_kios) {
+            $tantanganKios = $this->kios->tantangan($request, $periode);
+            $kiosSiap = $this->kios->siap();
+            if (! $kiosSiap || $request->session()->pull($this->kios->kunciAkses($request, $periode)) !== $tandaSesi) {
+                return response()->view('survei.kios', compact('periode', 'tantanganKios', 'tandaSesi', 'kiosSiap'))
+                    ->header('Cache-Control', 'private, no-store');
+            }
+        }
+
+        if ($periode->wajib_seb) {
+            $sebSiap = $this->seb->siap();
+            if ($sebSiap) {
+                $url = $this->seb->urlForm($request, $periode);
+                if ($request->fullUrl() !== $url) {
+                    return redirect()->to($url)->header('Cache-Control', 'private, no-store');
+                }
+            }
+
+            if (! $this->aksesSeb($request, $periode)) {
+                return response()->view('survei.seb', compact('periode', 'sebSiap'))
+                    ->header('Cache-Control', 'private, no-store');
+            }
+        }
+
         $targets = $targets->where('sudah_diisi', false)->values();
 
         return response()->view('survei.form', [
@@ -566,7 +644,7 @@ class SurveiPembelajaranController extends Controller
             'targets' => $targets,
             'skala' => Pertanyaan::SKALA,
             'tandaSesi' => $tandaSesi,
-            'tantanganKios' => null,
+            'tantanganKios' => $tantanganKios,
             'isKiosk' => true,
         ])->header('Cache-Control', 'private, no-store');
     }
@@ -593,7 +671,7 @@ class SurveiPembelajaranController extends Controller
 
     private function simpanJawaban(Request $request, Periode $periode, Siswa $siswa): void
     {
-        abort_unless($periode->terbuka(), 403, 'Survei belum dibuka atau sudah berakhir.');
+        abort_if(! $periode->wajib_seb && ! $periode->wajib_kios && ! $periode->terbuka(), 403, 'Survei belum dibuka atau sudah berakhir.');
         $status = $this->targetDenganStatus($periode, $siswa);
         $targets = $status->where('kelas_id', $siswa->id_kelas);
         abort_unless($targets->isNotEmpty(), 403, 'Survei tidak tersedia untuk kelasmu.');
@@ -603,13 +681,18 @@ class SurveiPembelajaranController extends Controller
         }
 
         $pending = $targets->where('sudah_diisi', false);
+        abort_unless($periode->terbuka(), 403, 'Survei belum dibuka atau sudah berakhir.');
         $this->pastikanSesiSiswa($request, $periode, $siswa->id_kelas);
+        abort_if($periode->wajib_seb && ! $this->aksesSeb($request, $periode), 403, 'Pengiriman memerlukan Safe Exam Browser.');
+        $this->pastikanKios($request, $periode);
+        $opsiKarakter = $periode->pilihanKarakter();
 
         $rules = [
             'jawaban' => 'required|array',
             'kendala' => 'nullable|array',
             'kendala_lainnya' => 'nullable|array',
             'komentar' => 'nullable|array',
+            'karakter' => 'nullable|array',
         ];
 
         foreach ($pending as $target) {
@@ -631,6 +714,7 @@ class SurveiPembelajaranController extends Controller
             foreach ($comments as $index => $_) {
                 $rules["komentar.$key.$index"] = ['nullable', 'string', 'max:1000'];
             }
+            $rules["karakter.$key"] = ['nullable', 'string', 'max:255', Rule::in($opsiKarakter)];
         }
 
         $values = $request->validate($rules);
@@ -662,6 +746,11 @@ class SurveiPembelajaranController extends Controller
                 }
             }
 
+            $karakterPilihan = $values['karakter'][$targetKey] ?? null;
+            if ($karakterPilihan === '') {
+                $karakterPilihan = null;
+            }
+
             $rows[] = [
                 'school_id' => $periode->school_id,
                 'target_id' => $target->uuid,
@@ -669,6 +758,7 @@ class SurveiPembelajaranController extends Controller
                 'jawaban' => $jawaban,
                 'kendala' => ['pilihan' => $pilihan, 'lainnya' => $lainnya],
                 'komentar' => $komentar,
+                'karakter' => $karakterPilihan,
             ];
         }
 
@@ -751,8 +841,15 @@ class SurveiPembelajaranController extends Controller
     {
         $request->session()->flash('success', 'Jawaban sudah dikirim dan bersifat rahasia.');
 
+        $keluar = null;
+        if ($periode->wajib_seb && $this->aksesSeb($request, $periode)) {
+            $request->session()->put('survei.seb.selesai', $request->user()->getKey());
+            $keluar = $this->seb->urlKeluar();
+        }
+
+        $kiosSelesai = $periode->wajib_kios ? route('survei.kios.selesai', $periode) : null;
         if ($request->expectsJson()) {
-            return response()->json(['tersimpan' => true])
+            return response()->json(array_filter(['tersimpan' => true, 'keluar' => $keluar, 'kios_selesai' => $kiosSelesai]))
                 ->header('Cache-Control', 'private, no-store');
         }
 
@@ -775,7 +872,7 @@ class SurveiPembelajaranController extends Controller
             ->with('info', 'Survei diisi dalam satu formulir kelas.');
     }
 
-    public function analisis(Periode $periode, AnalisisGuru $analisis)
+    public function analisis(Request $request, Periode $periode, AnalisisGuru $analisis)
     {
         $user = auth()->user();
         $lihatSemua = $user->canViewSurveiResults();
@@ -783,12 +880,73 @@ class SurveiPembelajaranController extends Controller
             return $this->akunTidakSesuai($periode, 'analisis', 'Gunakan akun guru pengampu atau petugas yang memiliki izin melihat rekap.');
         }
 
-        abort_unless($periode->berakhir(), 403, 'Analisis tersedia setelah survei berakhir.');
+        abort_unless($periode->berakhir() || $lihatSemua || $periode->bolehMelihatIdentitas($user), 403, 'Analisis tersedia setelah survei berakhir.');
 
         $lihatCatatan = $periode->bolehMelihatIdentitas($user);
-        $gurus = $analisis->rekap($periode, guruId: $lihatSemua ? null : $user->guru->uuid, sertakanCatatan: $lihatCatatan);
+        
+        // Rekap seluruh guru (untuk daftar guru & navigasi 1 guru per halaman)
+        $gurus = $analisis->rekap(
+            $periode,
+            guruId: $lihatSemua ? null : $user->guru->uuid,
+            sertakanCatatan: $lihatCatatan
+        );
         abort_if(! $lihatSemua && $gurus->isEmpty(), 403);
         Audit::log('survei_analisis_dibuka', $periode);
+
+        $totalGurus = $gurus->count();
+        $guruKeys = $gurus->keys()->values();
+
+        $requestedGuruId = $request->query('guru');
+        $page = (int) $request->query('page', 1);
+
+        if ($requestedGuruId && $guruKeys->contains($requestedGuruId)) {
+            $foundIndex = $guruKeys->search($requestedGuruId);
+            $page = ($foundIndex !== false) ? $foundIndex + 1 : 1;
+        }
+
+        $page = max(1, min($page, max(1, $totalGurus)));
+        $guruAktifId = $guruKeys->get($page - 1);
+        $guruAktifData = $guruAktifId ? $gurus->get($guruAktifId) : null;
+
+        // Dapatkan daftar tingkat yang diajar khusus oleh guru aktif
+        $guruTargets = $guruAktifId
+            ? $periode->targets()->where('guru_id', $guruAktifId)->get()
+            : collect();
+
+        $kelasUuids = $guruTargets->pluck('kelas_id')->unique();
+        $kelasMap = Kelas::whereIn('uuid', $kelasUuids)->pluck('tingkat', 'uuid');
+
+        $tingkatGuruList = [];
+        foreach ($guruTargets as $t) {
+            $tVal = $kelasMap[$t->kelas_id] ?? null;
+            if (! $tVal && preg_match('/(?:Kelas\s+)?(\d+)/i', $t->kelas_nama, $m)) {
+                $tVal = (int) $m[1];
+            }
+            if ($tVal) {
+                $tingkatGuruList[$tVal] = ($tingkatGuruList[$tVal] ?? 0) + 1;
+            }
+        }
+        ksort($tingkatGuruList);
+
+        // Filter tingkat hasil guru aktif (jika guru mengajar 2 atau 3 tingkat)
+        $tingkatDipilih = $request->query('tingkat');
+        if ($tingkatDipilih && array_key_exists((int) $tingkatDipilih, $tingkatGuruList)) {
+            $rekapFiltered = $analisis->rekap(
+                $periode,
+                guruId: $guruAktifId,
+                sertakanCatatan: $lihatCatatan,
+                tingkat: (string) $tingkatDipilih
+            );
+            $guruAktif = $rekapFiltered->first() ?? $guruAktifData;
+        } else {
+            $tingkatDipilih = null;
+            $guruAktif = $guruAktifData;
+        }
+
+        $prevPage = $page > 1 ? $page - 1 : null;
+        $nextPage = $page < $totalGurus ? $page + 1 : null;
+        $prevGuru = $prevPage ? $gurus->get($guruKeys->get($prevPage - 1)) : null;
+        $nextGuru = $nextPage ? $gurus->get($guruKeys->get($nextPage - 1)) : null;
 
         $kelas = $lihatSemua
             ? $gurus->flatMap(fn (array $guru) => $guru['peran']->flatMap(fn (array $peran) => $peran['targets']))
@@ -798,43 +956,63 @@ class SurveiPembelajaranController extends Controller
         return response()->view('survei.analisis', [
             'periode' => $periode,
             'gurus' => $gurus,
+            'guruAktif' => $guruAktif,
+            'guruAktifId' => $guruAktifId,
+            'page' => $page,
+            'totalGurus' => $totalGurus,
+            'prevPage' => $prevPage,
+            'nextPage' => $nextPage,
+            'prevGuru' => $prevGuru,
+            'nextGuru' => $nextGuru,
+            'tingkatGuruList' => $tingkatGuruList,
+            'tingkatDipilih' => $tingkatDipilih,
+            'totalKelasGuru' => $guruTargets->count(),
             'kelas' => $kelas,
             'lihatSemua' => $lihatSemua,
             'lihatCatatan' => $lihatCatatan,
         ])->header('Cache-Control', 'private, no-store');
     }
 
-    public function laporanGuru(Periode $periode, AnalisisGuru $analisis)
+    public function laporanGuru(Request $request, Periode $periode, AnalisisGuru $analisis)
     {
         $user = auth()->user();
         abort_unless($user->canViewSurveiResults(), 403);
-        abort_unless($periode->berakhir(), 403, 'Laporan tersedia setelah survei berakhir.');
+        abort_unless($periode->berakhir() || $user->canViewSurveiResults() || $periode->bolehMelihatIdentitas($user), 403, 'Laporan tersedia setelah survei berakhir.');
+        
+        $tingkat = $request->query('tingkat');
+        if ($tingkat === 'semua' || $tingkat === '') {
+            $tingkat = null;
+        }
+
         $lihatCatatan = $periode->bolehMelihatIdentitas($user);
-        $gurus = $analisis->rekap($periode, sertakanCatatan: $lihatCatatan);
+        $gurus = $analisis->rekap($periode, sertakanCatatan: $lihatCatatan, tingkat: $tingkat);
         $pdf = Pdf::loadView('survei.laporan-guru-pdf', [
             'periode' => $periode,
             'sekolah' => Setting::get('nama_sekolah', 'Sekolah'),
             'gurus' => $gurus,
             'lihatCatatan' => $lihatCatatan,
             'minimum' => AnalisisGuru::MINIMUM,
+            'tingkat' => $tingkat,
         ])->setPaper('a4');
         $pdf->render();
         $font = $pdf->getDomPDF()->getFontMetrics()->getFont('DejaVu Sans', 'normal');
         $pdf->getDomPDF()->getCanvas()->page_text(520, 820, '{PAGE_NUM} / {PAGE_COUNT}', $font, 7, [0.34, 0.40, 0.46]);
-        $response = $pdf->download('rekap-survei-per-guru-'.(Str::slug($periode->judul) ?: $periode->uuid).'.pdf');
+        $suffixTingkat = $tingkat ? '-tingkat-'.$tingkat : '';
+        $response = $pdf->download('rekap-survei-per-guru-'.(Str::slug($periode->judul) ?: $periode->uuid).$suffixTingkat.'.pdf');
 
-        Audit::log('survei_laporan_guru_diekspor', $periode, ['dengan_catatan' => $lihatCatatan]);
+        Audit::log('survei_laporan_guru_diekspor', $periode, ['dengan_catatan' => $lihatCatatan, 'tingkat' => $tingkat]);
 
         return $response->header('Cache-Control', 'private, no-store');
     }
 
     public function laporanKelas(Periode $periode, string $kelasId, AnalisisGuru $analisis)
     {
-        abort_unless(auth()->user()->canViewSurveiResults(), 403);
-        abort_unless($periode->berakhir(), 403, 'Laporan tersedia setelah survei berakhir.');
+        $user = auth()->user();
+        abort_unless($user->canViewSurveiResults(), 403);
+        abort_unless($periode->berakhir() || $user->canViewSurveiResults() || $periode->bolehMelihatIdentitas($user), 403, 'Laporan tersedia setelah survei berakhir.');
 
         $target = $periode->targets()->where('kelas_id', $kelasId)->firstOrFail();
-        $gurus = $analisis->rekap($periode, $kelasId);
+        $gurus = $analisis->rekap($periode, $kelasId, sertakanCatatan: $periode->bolehMelihatIdentitas($user));
         $namaKelas = $target->kelas_nama;
         $filename = 'laporan-survei-'.(Str::slug($namaKelas) ?: $kelasId).'.pdf';
 
@@ -859,7 +1037,6 @@ class SurveiPembelajaranController extends Controller
     public function responden(Periode $periode)
     {
         abort_unless($periode->bolehMelihatIdentitas(auth()->user()), 403);
-        abort_unless($periode->berakhir(), 403, 'Daftar responden tersedia setelah survei berakhir.');
 
         $kelas = Respons::query()
             ->join('survei_targets', 'survei_targets.uuid', '=', 'survei_respons.target_id')
@@ -898,7 +1075,7 @@ class SurveiPembelajaranController extends Controller
     public function export(Periode $periode, AnalisisGuru $analisis)
     {
         $this->admin();
-        abort_unless($periode->berakhir(), 403, 'Ekspor tersedia setelah survei ditutup.');
+        abort_unless($periode->berakhir() || auth()->user()->isAdmin(), 403, 'Ekspor tersedia setelah survei ditutup.');
         Audit::log('survei_rekap_diekspor', $periode);
 
         return response()->streamDownload(function () use ($periode, $analisis): void {
@@ -943,17 +1120,17 @@ class SurveiPembelajaranController extends Controller
         $user = auth()->user();
         $lihatSemua = $user->canViewSurveiResults();
         abort_unless($lihatSemua || ($user->canViewOwnSurveiResults() && $target->guru_id === $user->guru->uuid), 403);
-        abort_unless($target->periode->berakhir(), 403, 'Hasil tersedia setelah survei ditutup.');
+        abort_unless($target->periode->berakhir() || $lihatSemua || $target->periode->bolehMelihatIdentitas($user), 403, 'Hasil tersedia setelah survei ditutup.');
 
         $pembuat = $target->periode->bolehMelihatIdentitas($user);
         Audit::log('survei_hasil_dibuka', $target);
-        $columns = $pembuat ? ['jawaban', 'kendala', 'komentar'] : ['jawaban', 'kendala'];
+        $columns = ['jawaban', 'kendala', 'komentar', 'karakter'];
         $responses = $target->respons()->get($columns);
         $jumlah = $responses->count();
         $hasil = $jumlah >= AnalisisGuru::MINIMUM ? $analisis->butir($target->periode, $target->jenis, $responses) : collect();
 
         $komentar = [];
-        if ($pembuat && $jumlah >= AnalisisGuru::MINIMUM) {
+        if ($jumlah >= AnalisisGuru::MINIMUM) {
             foreach ($target->periode->pertanyaanTerbuka($target->jenis) as $index => $pertanyaan) {
                 $komentar[$pertanyaan] = $responses->map(fn ($response) => $response->komentar[$index] ?? null)->filter()->values();
             }
@@ -961,12 +1138,15 @@ class SurveiPembelajaranController extends Controller
                 $komentar['Kendala lainnya'] = $responses->map(fn ($response) => $response->kendala['lainnya'] ?? null)->filter()->values();
             }
         }
-        $kendala = $jumlah >= 5 ? $this->ringkasKendala($responses, $target->periode->pilihanKendala($target->jenis)) : [];
+        $kendala = $jumlah >= AnalisisGuru::MINIMUM ? $this->ringkasKendala($responses, $target->periode->pilihanKendala($target->jenis)) : [];
         if (! $lihatSemua) {
             $kendala = array_filter($kendala, fn (int $count) => $count >= AnalisisGuru::MINIMUM);
         }
+        $karakter = $jumlah >= AnalisisGuru::MINIMUM
+            ? $responses->pluck('karakter')->filter(fn ($k) => is_string($k) && trim($k) !== '')->countBy()->all()
+            : [];
 
-        return response()->view('survei.hasil', compact('target', 'jumlah', 'hasil', 'komentar', 'kendala', 'pembuat'))
+        return response()->view('survei.hasil', compact('target', 'jumlah', 'hasil', 'komentar', 'kendala', 'karakter', 'pembuat'))
             ->header('Cache-Control', 'private, no-store');
     }
 

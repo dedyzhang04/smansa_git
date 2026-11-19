@@ -3,7 +3,8 @@
 @section('hide_page_footer', '1')
 @include('survei.gaya')
 @section('content')
-<div class="survei-page mx-auto max-w-4xl space-y-5" data-daftar="{{ route('survei.index') }}">
+<div class="survei-page mx-auto max-w-4xl space-y-5" data-daftar="{{ route('survei.index') }}" data-seb="{{ $periode->wajib_seb ? '1' : '0' }}"
+    @if(!empty($tantanganKios)) data-periode-kios="{{ $periode->uuid }}" data-tantangan-kios="{{ $tantanganKios }}" @endif>
     <header class="survei-hero">
         <div class="survei-identitas">
             <div class="survei-logo">
@@ -103,6 +104,24 @@
                     @endforeach
 
                 <div class="survei-langkah space-y-4" data-langkah data-masukan hidden>
+                @php
+                    $opsiKarakter = $periode->pilihanKarakter();
+                    $karakterLama = old("karakter.{$target->uuid}");
+                @endphp
+                @if(!empty($opsiKarakter))
+                    <div class="rounded-lg border border-slate-200 p-4 space-y-2">
+                        <label for="karakter-{{ $target->uuid }}" class="block font-semibold text-slate-800 text-sm">
+                            Menurut kamu, guru ini termasuk guru yang ...
+                        </label>
+                        <select id="karakter-{{ $target->uuid }}" name="karakter[{{ $target->uuid }}]" class="form-input w-full text-sm rounded-lg border-slate-300">
+                            <option value="">-- Pilih salah satu (opsional) --</option>
+                            @foreach($opsiKarakter as $opsi)
+                                <option value="{{ $opsi }}" @selected($karakterLama === $opsi)>{{ $opsi }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+                @endif
+
                 @if($target->jenis === 'mapel')
                     <fieldset class="rounded-lg border border-slate-200 p-4" x-data="{ kendalaUtama: @js($jawabanKendala) }">
                         <legend class="font-semibold">Apa kendala utamamu di pelajaran ini? <span class="font-normal text-slate-500">(opsional)</span></legend>
